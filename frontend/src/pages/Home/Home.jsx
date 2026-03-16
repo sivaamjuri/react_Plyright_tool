@@ -6,18 +6,17 @@ import './Home.css';
 const Home = () => {
     const [results, setResults] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
+    const [progress, setProgress] = useState({ current: 0, total: 0, message: '', type: 'idle', completedStudents: [] });
 
-    const handleAnalyze = async (solutionFile, studentFiles) => {
+    const handleAnalyze = async (solutionFile, studentFiles, excelFile) => {
         setIsLoading(true);
         setResults(null);
+        setProgress({ current: 0, total: 0, message: 'Initializing...', type: 'status', completedStudents: [] });
 
         const formData = new FormData();
         formData.append('solution', solutionFile);
-
-        // Append multiple student files
-        studentFiles.forEach(file => {
-            formData.append('student', file);
-        });
+        studentFiles.forEach(file => formData.append('student', file));
+        if (excelFile) formData.append('studentExcel', excelFile);
 
         try {
             const response = await fetch('http://127.0.0.1:3000/compare', {
@@ -30,14 +29,59 @@ const Home = () => {
                 throw new Error(errData.error || 'Analysis failed');
             }
 
-            const data = await response.json();
-            console.log('Batch Analysis Results:', data);
-            setResults(data);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let accumulated = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                accumulated += decoder.decode(value, { stream: true });
+                const lines = accumulated.split('\n');
+                accumulated = lines.pop(); // Keep the last partial line
+
+                for (const line of lines) {
+                    if (!line.trim()) continue;
+                    try {
+                        const json = JSON.parse(line);
+                        if (json.type === 'status' || json.type === 'start' || json.type === 'progress') {
+                            setProgress(prev => ({
+                                ...prev,
+                                message: json.message || prev.message,
+                                total: json.total !== undefined ? json.total : prev.total,
+                                type: json.type
+                            }));
+                        } else if (json.type === 'student_complete') {
+                            setProgress(prev => ({
+                                ...prev,
+                                current: prev.current + 1,
+                                completedStudents: [
+                                    {
+                                        name: json.studentName,
+                                        status: json.status,
+                                        error: json.error,
+                                        remarks: json.remarks
+                                    },
+                                    ...prev.completedStudents
+                                ]
+                            }));
+                        } else if (json.type === 'result') {
+                            setResults(json.data);
+                        } else if (json.type === 'error') {
+                            throw new Error(json.message);
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse stream line:', line, e);
+                    }
+                }
+            }
         } catch (error) {
             console.error(error);
             alert(`Error: ${error.message}`);
         } finally {
             setIsLoading(false);
+            setProgress(prev => ({ ...prev, type: 'idle' }));
         }
     };
 
@@ -50,7 +94,7 @@ const Home = () => {
 
             <main className="main-content">
                 {!results ? (
-                    <UploadForm onAnalyze={handleAnalyze} isLoading={isLoading} />
+                    <UploadForm onAnalyze={handleAnalyze} isLoading={isLoading} progress={progress} />
                 ) : (
                     <div className="results-wrapper">
                         <Results data={results} />

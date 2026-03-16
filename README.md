@@ -26,6 +26,11 @@ A high-performance visual regression tool designed to automate the assessment of
 - **Pixel-by-Pixel Comparison**: Leverages `pixelmatch` to generate transparency-aware similarity scores.
 - **Network Idle Detection**: Ensures screenshots are only taken after all assets and API data have finished loading.
 
+### 📊 Bulk Evaluation & Reporting
+- **Excel Ingestion**: Upload an Excel sheet with student GitHub repo links for automatic batch processing.
+- **Auto-Downloader**: Automatically clones/downloads GitHub repositories (main or master branches) as ZIPs for analysis.
+- **Downloadable Reports**: Generate summary Excel reports containing Student Names, Repo Links, Similarity Scores, and automated Remarks.
+
 ---
 
 ## 🛠️ Tech Stack
@@ -65,12 +70,12 @@ npm install
 ## 📖 Usage Guide
 
 1. **Upload Solution**: Provide the reference React project ZIP.
-2. **Upload Student**: Provide the student's submission ZIP.
+2. **Student Submission**: Upload student projects as individual ZIPs **OR** upload an Excel sheet containing GitHub repository links.
 3. **Wait for Boot**: The tool will:
-   - Extract files.
-   - Link dependencies.
+   - Dowload GitHub repos (if Excel used).
+   - Extract files and link dependencies.
    - Start development servers (and mock APIs).
-4. **View Results**: Get a side-by-side comparison, a similarity score (0-100%), and a performance breakdown.
+4. **View & Export**: Get side-by-side comparisons, performance breakdowns, and **download the final results as an Excel report**.
 
 ---
 

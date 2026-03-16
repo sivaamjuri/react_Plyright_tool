@@ -8,6 +8,9 @@ const { chromium } = require('playwright');
 const PNG = require('pngjs').PNG;
 const pixelmatch = require('pixelmatch');
 const { spawn } = require('child_process');
+const xlsx = require('xlsx');
+const axios = require('axios');
+const { performance } = require('perf_hooks');
 
 const app = express();
 const PORT = 3000;
@@ -17,7 +20,7 @@ app.use(express.json());
 
 // Log all requests
 app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+    log(`${req.method} ${req.url}`);
     next();
 });
 
@@ -41,24 +44,133 @@ function log(msg) {
     }
 }
 
+// Helper: Kill Process Safely
+function killProcess(proc) {
+    if (!proc || !proc.pid) return;
+    try {
+        const killer = spawn("taskkill", ["/pid", proc.pid.toString(), '/f', '/t'], { shell: true });
+        killer.on('error', (err) => log(`Failed to spawn taskkill for PID ${proc.pid}: ${err.message}`));
+    } catch (e) {
+        log(`Error calling taskkill for PID ${proc.pid}: ${e.message}`);
+    }
+}
+
+// Helper: Download GitHub Repo as ZIP
+async function downloadRepoAsZip(repoUrl, outputPath) {
+    // Basic format: https://github.com/USER/REPO
+    // Normalize: remove .git if present, remove trailing slash
+    let normalizedUrl = repoUrl.trim().replace(/\.git$/, '').replace(/\/$/, '');
+
+    // Try main branch first, then master
+    const tryDownload = async (branch) => {
+        const zipUrl = `${normalizedUrl}/archive/refs/heads/${branch}.zip`;
+        log(`Downloading from ${zipUrl}...`);
+        const response = await axios({
+            method: 'get',
+            url: zipUrl,
+            responseType: 'stream',
+            timeout: 30000,
+            validateStatus: (status) => status === 200
+        });
+        const writer = fs.createWriteStream(outputPath);
+        response.data.pipe(writer);
+        return new Promise((resolve, reject) => {
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+        });
+    };
+
+    try {
+        await tryDownload('main');
+    } catch (e) {
+        log(`Failed to download main branch, trying master...`);
+        try {
+            await tryDownload('master');
+        } catch (e2) {
+            throw new Error(`Failed to download ZIP from GitHub repo: ${repoUrl}`);
+        }
+    }
+}
+
+// Helper: Parse Excel for GitHub links
+function parseExcelForLinks(filePath) {
+    const workbook = xlsx.readFile(filePath);
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    
+    // Get all rows as arrays to detect if the first row is data or header
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+    if (rows.length === 0) return [];
+
+    const results = [];
+    const firstRowHasUrl = rows[0].some(cell => typeof cell === 'string' && cell.toLowerCase().includes('github.com'));
+
+    if (firstRowHasUrl) {
+        // No header row, or first row IS a repository link. Process all rows.
+        rows.forEach(row => {
+            const githubUrl = row.find(cell => typeof cell === 'string' && cell.toLowerCase().includes('github.com'));
+            if (githubUrl) {
+                const name = row.find(cell => 
+                    cell && typeof cell === 'string' && cell !== githubUrl && !cell.toLowerCase().includes('github.com')
+                ) || githubUrl.split('/').pop() || 'Student';
+                results.push({ url: githubUrl, name });
+            }
+        });
+    } else {
+        // First row looks like headers (no github link). Use standard object-based parsing.
+        const data = xlsx.utils.sheet_to_json(sheet);
+        data.forEach(row => {
+            for (const [key, value] of Object.entries(row)) {
+                if (typeof value === 'string' && value.toLowerCase().includes('github.com')) {
+                    results.push({
+                        url: value,
+                        name: row['Name'] || row['Student Name'] || row['student_name'] || row['Username'] || value.split('/').pop() || 'Student'
+                    });
+                    break;
+                }
+            }
+        });
+    }
+    return results;
+}
+
+// Helper: Generate Remarks based on score
+function getRemarks(score, status, errorMsg) {
+    if (status === 'error') return `Error: ${errorMsg}`;
+    const s = parseFloat(score);
+    if (s >= 100) return "Perfect match with the solution UI.";
+    if (s >= 90) return "Very high similarity, minor pixel differences.";
+    if (s >= 70) return "Good similarity, but some layout or style deviations detected.";
+    if (s >= 40) return "Moderate similarity, significant differences in UI components.";
+    if (s > 0) return "Low similarity, UI does not match the reference design.";
+    return "No similarity or error during rendering.";
+}
+
 // Helper: Find project root (contains package.json or index.html)
-// Helper: Find project root (contains package.json or index.html)
-async function findProjectRoot(baseDir) {
-    // Check top level
+async function findProjectRoot(baseDir, depth = 0) {
+    if (depth > 5) return null; // Prevent infinite depth
+
+    // Check current level
     if (await fs.pathExists(path.join(baseDir, 'package.json'))) return { path: baseDir, type: 'react' };
     if (await fs.pathExists(path.join(baseDir, 'index.html'))) return { path: baseDir, type: 'static' };
 
+    // Scan all subdirectories
     const items = await fs.readdir(baseDir, { withFileTypes: true });
-    const dirs = items.filter(item => item.isDirectory());
+    const dirs = items.filter(item => item.isDirectory() && 
+                                     item.name !== 'node_modules' && 
+                                     item.name !== '.git' && 
+                                     item.name !== 'dist');
 
-    // Check one level deep
     for (const dir of dirs) {
         const subDir = path.join(baseDir, dir.name);
-        if (await fs.pathExists(path.join(subDir, 'package.json'))) return { path: subDir, type: 'react' };
-        if (await fs.pathExists(path.join(subDir, 'index.html'))) return { path: subDir, type: 'static' };
+        const result = await findProjectRoot(subDir, depth + 1);
+        if (result) return result;
     }
 
-    throw new Error(`No project root (package.json or index.html) found in ${baseDir}`);
+    if (depth === 0) {
+        throw new Error(`No project root (package.json or index.html) found in ${baseDir}`);
+    }
+    return null;
 }
 
 
@@ -82,7 +194,7 @@ function startServer(projectInfo, port) {
                 });
 
                 serve.unref();
-                checkServerReady(port, serve, resolve, reject);
+                checkServerReady(port, '', serve, resolve, reject);
                 return;
             }
 
@@ -165,6 +277,16 @@ function startServer(projectInfo, port) {
                 try {
                     const masterModules = path.join(masterDir, 'node_modules');
                     const targetModules = path.join(projectDir, 'node_modules');
+                    
+                    // If node_modules exists and is NOT a junction/symlink, remove it
+                    if (await fs.pathExists(targetModules)) {
+                        const lstat = await fs.lstat(targetModules);
+                        if (!lstat.isSymbolicLink()) {
+                            log(`[${port}] Removing existing student node_modules...`);
+                            await fs.remove(targetModules);
+                        }
+                    }
+                    
                     await fs.ensureSymlink(masterModules, targetModules, 'junction');
                 } catch (e) {
                     log(`[${port}] Symlink failed: ${e.message}`);
@@ -292,7 +414,7 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
 
         if (attempts >= maxAttempts) {
             log(`[${port}] Server startup timed out after ${maxAttempts}s`);
-            return reject(new Error(`Timeout waiting for server on port ${port}`));
+            return reject(new Error(`Timeout waiting for server on port ${port}. Check dev-server.log for details.`));
         }
         attempts++;
 
@@ -302,10 +424,29 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
 
         try {
             const url = `http://127.0.0.1:${port}${basePath}`;
-            await fetch(url);
+            // Use axios for better control over timeouts and errors, bypassing any proxies
+            await axios.get(url, { 
+                timeout: 2000,
+                headers: { 'Accept': 'text/html' },
+                validateStatus: (status) => status >= 200 && status < 500,
+                proxy: false // Avoid proxy issues on local connections
+            });
             log(`[${port}] Server ready at ${url}`);
             resolve({ process: serverProcess, baseUrl: url });
         } catch (e) {
+            // Fallback: try 'localhost' if 127.0.0.1 fails once
+            if (attempts === 5) {
+                try {
+                    const localUrl = `http://localhost:${port}${basePath}`;
+                    await axios.get(localUrl, { timeout: 1000, proxy: false });
+                    log(`[${port}] Server ready at ${localUrl}`);
+                    return resolve({ process: serverProcess, baseUrl: `http://127.0.0.1:${port}${basePath}` });
+                } catch (err) {}
+            }
+            // Log connection errors occasionally to debug
+            if (attempts % 30 === 0) {
+                log(`[${port}] Connection attempt error for http://127.0.0.1:${port}${basePath}: ${e.message}`);
+            }
             setTimeout(check, 1000);
         }
     };
@@ -337,7 +478,7 @@ async function captureScreenshots(baseUrl, routes, outputDir) {
 
             await page.screenshot({ path: savePath, fullPage: true });
         } catch (e) {
-            console.error(`Failed to capture ${url}:`, e);
+            log(`Failed to capture ${url}: ${e.message}`);
         }
     }
 
@@ -422,48 +563,82 @@ function compareImages(img1Path, img2Path, diffOutputPath) {
 // Serve static files from temp to show screenshots
 app.use('/temp', express.static(TEMP_DIR));
 
-app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }]), async (req, res) => {
+app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, { name: 'studentExcel' }]), async (req, res) => {
     const solutionFile = req.files['solution']?.[0];
     const studentFiles = req.files['student'] || [];
+    const studentExcel = req.files['studentExcel']?.[0];
 
-    if (!solutionFile || studentFiles.length === 0) {
-        return res.status(400).json({ error: 'Both solution and at least one student zip file are required.' });
+    if (!solutionFile || (studentFiles.length === 0 && !studentExcel)) {
+        return res.status(400).json({ error: 'Both solution and either student ZIP files or student Excel sheet are required.' });
     }
+
+    // Set up streaming response
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    const sendProgress = (data) => {
+        res.write(JSON.stringify(data) + '\n');
+    };
 
     const runId = Date.now().toString();
     const runDir = path.join(TEMP_DIR, runId);
     const solExtractDir = path.join(runDir, 'solution_raw');
 
     // Performance tracking
-    const { performance } = require('perf_hooks');
     const startOverall = performance.now();
 
     let solServer; // Declare solServer here to be accessible in finally block
 
     try {
         // 1. Prepare Solution (Once)
-        log('Extracting Solution ZIP...');
+        sendProgress({ type: 'status', message: 'Extracting Solution ZIP...' });
         await fs.ensureDir(solExtractDir);
         new AdmZip(solutionFile.path).extractAllTo(solExtractDir, true);
 
         const solRoot = await findProjectRoot(solExtractDir);
         const solPort = 4000 + Math.floor(Math.random() * 500);
+        sendProgress({ type: 'status', message: 'Starting Solution Server...' });
         solServer = await startServer(solRoot, solPort); // Assign to solServer
 
         const solScreenshotDir = path.join(runDir, 'solution', 'screenshots');
         await fs.ensureDir(solScreenshotDir);
 
-        log('Capturing Solution Screenshots...');
+        sendProgress({ type: 'status', message: 'Capturing Solution Screenshots...' });
         const routes = ['/'];
         await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir);
 
-        // 2. Process Students in Batches (to avoid overloading CPU/RAM)
+        // 2. Prepare Student Task List
+        const studentTasks = [];
+
+        // Add files
+        studentFiles.forEach(file => {
+            studentTasks.push({ type: 'file', path: file.path, name: file.originalname });
+        });
+
+        // Add Excel links
+        if (studentExcel) {
+            try {
+                const links = parseExcelForLinks(studentExcel.path);
+                links.forEach(link => {
+                    studentTasks.push({ type: 'repo', path: link.url, name: link.name });
+                });
+                // Optional: remove excel file after parsing
+                await fs.remove(studentExcel.path);
+            } catch (e) {
+                log(`Failed to parse Excel: ${e.message}`);
+            }
+        }
+
+        // 3. Process Students in Batches
         const allResults = [];
         const BATCH_SIZE = 2; // Process 2 students at a time
 
-        for (let i = 0; i < studentFiles.length; i += BATCH_SIZE) {
-            const batch = studentFiles.slice(i, i + BATCH_SIZE);
-            const batchPromises = batch.map(async (stuFile, index) => {
+        sendProgress({ type: 'start', total: studentTasks.length });
+
+        for (let i = 0; i < studentTasks.length; i += BATCH_SIZE) {
+            const batch = studentTasks.slice(i, i + BATCH_SIZE);
+            sendProgress({ type: 'progress', current: i, total: studentTasks.length, message: `Processing batch ${Math.floor(i/BATCH_SIZE) + 1}...` });
+            const batchPromises = batch.map(async (task, index) => {
                 let stuServer; // Declare stuServer for cleanup within the batch item
                 const stuId = `student_${i + index}`;
                 const stuExtractDir = path.join(runDir, stuId, 'raw');
@@ -477,11 +652,23 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }]),
                     await fs.ensureDir(stuScreenshotDir);
                     await fs.ensureDir(diffScreenshotDir);
 
-                    log(`Processing ${stuFile.originalname}...`);
+                    log(`Processing ${task.name}...`);
 
                     const tUnzipStart = performance.now();
-                    new AdmZip(stuFile.path).extractAllTo(stuExtractDir, true);
+                    let zipPath = task.path;
+
+                    if (task.type === 'repo') {
+                        zipPath = path.join(runDir, `${stuId}_repo.zip`);
+                        await downloadRepoAsZip(task.path, zipPath);
+                    }
+
+                    new AdmZip(zipPath).extractAllTo(stuExtractDir, true);
                     tUnzip = performance.now() - tUnzipStart;
+
+                    // Clean up downloaded zip if it's a repo
+                    if (task.type === 'repo') {
+                        await fs.remove(zipPath).catch(() => { });
+                    }
 
                     const t0 = performance.now();
                     const stuRoot = await findProjectRoot(stuExtractDir);
@@ -523,10 +710,13 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }]),
 
                     const totalTimeNum = performance.now() - tStart;
 
+                    const scoreNum = Math.round(finalOverall).toFixed(0);
                     return {
-                        studentName: stuFile.originalname,
+                        studentName: task.name,
+                        repoUrl: task.type === 'repo' ? task.path : 'N/A (Uploaded ZIP)',
                         status: 'success',
-                        overallScore: Math.round(finalOverall).toFixed(0),
+                        overallScore: scoreNum,
+                        remarks: getRemarks(scoreNum, 'success'),
                         pages: pageResults,
                         timings: {
                             unzip: (tUnzip / 1000).toFixed(2) + 's',
@@ -537,37 +727,61 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }]),
                         }
                     };
                 } catch (err) {
-                    log(`Failed to process ${stuFile.originalname}: ${err.message}`);
+                    log(`Failed to process ${task.name}: ${err.message}`);
                     return {
-                        studentName: stuFile.originalname,
+                        studentName: task.name,
+                        repoUrl: task.type === 'repo' ? task.path : 'N/A (Uploaded ZIP)',
                         status: 'error',
+                        remarks: getRemarks(0, 'error', err.message),
                         error: err.message
                     };
                 } finally {
                     // Cleanup student server for this batch item
                     if (stuServer?.process) {
-                        spawn("taskkill", ["/pid", stuServer.process.pid, '/f', '/t']);
+                        killProcess(stuServer.process);
                     }
                 }
             });
 
             const batchResults = await Promise.all(batchPromises);
             allResults.push(...batchResults);
+            
+            // Send partial progress for the completed batch
+            batchResults.forEach(res => {
+                sendProgress({
+                    type: 'student_complete',
+                    studentName: res.studentName,
+                    status: res.status,
+                    error: res.error,
+                    remarks: res.remarks
+                });
+            });
         }
 
         const overallTime = ((performance.now() - startOverall) / 1000).toFixed(2) + 's';
-        res.json({
-            runId,
-            results: allResults,
-            timings: { overall: overallTime }
+        sendProgress({
+            type: 'result',
+            data: {
+                runId,
+                results: allResults,
+                timings: { overall: overallTime }
+            }
         });
+        res.end();
 
     } catch (error) {
-        res.status(500).json({ error: error.message, stack: error.stack });
+        log(`Fatal error in /compare: ${error.message}`);
+        // Avoid sending 500 if we already started streaming
+        if (!res.headersSent) {
+            res.status(500).json({ error: error.message });
+        } else {
+            res.write(JSON.stringify({ type: 'error', message: error.message }) + '\n');
+            res.end();
+        }
     } finally {
         // Cleanup processes just in case
         if (solServer?.process) {
-            spawn("taskkill", ["/pid", solServer.process.pid, '/f', '/t']);
+            killProcess(solServer.process);
         }
 
         // Clean uploads
@@ -584,5 +798,5 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }]),
 });
 
 app.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    log(`Server running on http://localhost:${PORT}`);
 });

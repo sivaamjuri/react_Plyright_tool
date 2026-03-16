@@ -1,4 +1,5 @@
-
+import { useState } from 'react';
+import * as XLSX from 'xlsx';
 import './Results.css';
 
 const Results = ({ data }) => {
@@ -22,6 +23,25 @@ const Results = ({ data }) => {
                         <span className="value">{data.timings.overall}</span>
                     </div>
                 </div>
+
+                <button 
+                    className="download-excel-btn"
+                    onClick={() => {
+                        const excelData = data.results.map(res => ({
+                            'Student Name': res.studentName,
+                            'GitHub Repository': res.repoUrl || 'N/A',
+                            'Similarity Score': res.status === 'success' ? `${res.overallScore}%` : '0%',
+                            'Remarks': res.remarks || 'No remarks available.'
+                        }));
+
+                        const ws = XLSX.utils.json_to_sheet(excelData);
+                        const wb = XLSX.utils.book_new();
+                        XLSX.utils.book_append_sheet(wb, ws, "Evaluation Results");
+                        XLSX.writeFile(wb, `Evaluation_Report_${Date.now()}.xlsx`);
+                    }}
+                >
+                    <span className="icon">📥</span> Download Excel Report
+                </button>
 
                 <div className="projects-list">
                     {data.results.map((res, idx) => (
@@ -136,7 +156,5 @@ const Results = ({ data }) => {
         </div>
     );
 };
-
-import { useState } from 'react';
 
 export default Results;

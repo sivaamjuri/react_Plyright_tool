@@ -40,6 +40,34 @@
     padding: 2rem;
 }
 
+.download-excel-btn {
+    width: 100%;
+    margin: 1.5rem 0;
+    padding: 1rem;
+    background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: all 0.3s;
+    box-shadow: 0 4px 12px rgba(22, 163, 74, 0.2);
+}
+
+.download-excel-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(22, 163, 74, 0.3);
+    filter: brightness(1.1);
+}
+
+.download-excel-btn .icon {
+    font-size: 1.2rem;
+}
+
 /* Stats Cards */
 .overall-stats {
     display: grid;
