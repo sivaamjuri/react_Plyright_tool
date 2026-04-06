@@ -618,6 +618,12 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
         const routes = ['/'];
         await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir);
 
+        // FREE UP RAM FOR AWS t3.micro: Kill the solution server immediately after screenshots!
+        if (solServer?.process) {
+            killProcess(solServer.process);
+            solServer = null;
+        }
+
         // 2. Prepare Student Task List
         const studentTasks = [];
 
