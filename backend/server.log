@@ -4407,3 +4407,4 @@ npm error A complete log of this run can be found in: C:\Users\sivab\AppData\Loc
 [2026-03-11T13:00:25.367Z] GET /temp/1773233866824/student_0/diffs/index.png
 [2026-03-11T13:00:40.865Z] GET /temp/1773233866824/student_3/screenshots/index.png
 [2026-03-11T13:00:40.867Z] GET /temp/1773233866824/student_3/diffs/index.png
+[2026-04-06T06:22:31.065Z] Server running on http://localhost:3000

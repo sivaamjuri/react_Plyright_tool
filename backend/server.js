@@ -11,9 +11,10 @@ const { spawn } = require('child_process');
 const xlsx = require('xlsx');
 const axios = require('axios');
 const { performance } = require('perf_hooks');
+const os = require('os');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
@@ -48,10 +49,20 @@ function log(msg) {
 function killProcess(proc) {
     if (!proc || !proc.pid) return;
     try {
-        const killer = spawn("taskkill", ["/pid", proc.pid.toString(), '/f', '/t'], { shell: true });
-        killer.on('error', (err) => log(`Failed to spawn taskkill for PID ${proc.pid}: ${err.message}`));
+        if (os.platform() === 'win32') {
+            const killer = spawn("taskkill", ["/pid", proc.pid.toString(), '/f', '/t'], { shell: true });
+            killer.on('error', (err) => log(`Failed to spawn taskkill for PID ${proc.pid}: ${err.message}`));
+        } else {
+            // Linux/macOS
+            const killer = spawn("pkill", ["-P", proc.pid.toString()]);
+            killer.on('close', () => {
+                try {
+                    process.kill(proc.pid, 'SIGKILL');
+                } catch (e) {}
+            });
+        }
     } catch (e) {
-        log(`Error calling taskkill for PID ${proc.pid}: ${e.message}`);
+        log(`Error calling process kill for PID ${proc.pid}: ${e.message}`);
     }
 }
 
@@ -97,7 +108,7 @@ function parseExcelForLinks(filePath) {
     const workbook = xlsx.readFile(filePath);
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    
+
     // Get all rows as arrays to detect if the first row is data or header
     const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
     if (rows.length === 0) return [];
@@ -110,7 +121,7 @@ function parseExcelForLinks(filePath) {
         rows.forEach(row => {
             const githubUrl = row.find(cell => typeof cell === 'string' && cell.toLowerCase().includes('github.com'));
             if (githubUrl) {
-                const name = row.find(cell => 
+                const name = row.find(cell =>
                     cell && typeof cell === 'string' && cell !== githubUrl && !cell.toLowerCase().includes('github.com')
                 ) || githubUrl.split('/').pop() || 'Student';
                 results.push({ url: githubUrl, name });
@@ -156,10 +167,10 @@ async function findProjectRoot(baseDir, depth = 0) {
 
     // Scan all subdirectories
     const items = await fs.readdir(baseDir, { withFileTypes: true });
-    const dirs = items.filter(item => item.isDirectory() && 
-                                     item.name !== 'node_modules' && 
-                                     item.name !== '.git' && 
-                                     item.name !== 'dist');
+    const dirs = items.filter(item => item.isDirectory() &&
+        item.name !== 'node_modules' &&
+        item.name !== '.git' &&
+        item.name !== 'dist');
 
     for (const dir of dirs) {
         const subDir = path.join(baseDir, dir.name);
@@ -277,7 +288,7 @@ function startServer(projectInfo, port) {
                 try {
                     const masterModules = path.join(masterDir, 'node_modules');
                     const targetModules = path.join(projectDir, 'node_modules');
-                    
+
                     // If node_modules exists and is NOT a junction/symlink, remove it
                     if (await fs.pathExists(targetModules)) {
                         const lstat = await fs.lstat(targetModules);
@@ -286,7 +297,7 @@ function startServer(projectInfo, port) {
                             await fs.remove(targetModules);
                         }
                     }
-                    
+
                     await fs.ensureSymlink(masterModules, targetModules, 'junction');
                 } catch (e) {
                     log(`[${port}] Symlink failed: ${e.message}`);
@@ -425,7 +436,7 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
         try {
             const url = `http://127.0.0.1:${port}${basePath}`;
             // Use axios for better control over timeouts and errors, bypassing any proxies
-            await axios.get(url, { 
+            await axios.get(url, {
                 timeout: 2000,
                 headers: { 'Accept': 'text/html' },
                 validateStatus: (status) => status >= 200 && status < 500,
@@ -441,7 +452,7 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
                     await axios.get(localUrl, { timeout: 1000, proxy: false });
                     log(`[${port}] Server ready at ${localUrl}`);
                     return resolve({ process: serverProcess, baseUrl: `http://127.0.0.1:${port}${basePath}` });
-                } catch (err) {}
+                } catch (err) { }
             }
             // Log connection errors occasionally to debug
             if (attempts % 30 === 0) {
@@ -637,7 +648,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
         for (let i = 0; i < studentTasks.length; i += BATCH_SIZE) {
             const batch = studentTasks.slice(i, i + BATCH_SIZE);
-            sendProgress({ type: 'progress', current: i, total: studentTasks.length, message: `Processing batch ${Math.floor(i/BATCH_SIZE) + 1}...` });
+            sendProgress({ type: 'progress', current: i, total: studentTasks.length, message: `Processing batch ${Math.floor(i / BATCH_SIZE) + 1}...` });
             const batchPromises = batch.map(async (task, index) => {
                 let stuServer; // Declare stuServer for cleanup within the batch item
                 const stuId = `student_${i + index}`;
@@ -745,7 +756,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
             const batchResults = await Promise.all(batchPromises);
             allResults.push(...batchResults);
-            
+
             // Send partial progress for the completed batch
             batchResults.forEach(res => {
                 sendProgress({

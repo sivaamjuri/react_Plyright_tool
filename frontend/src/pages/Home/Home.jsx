@@ -19,7 +19,8 @@ const Home = () => {
         if (excelFile) formData.append('studentExcel', excelFile);
 
         try {
-            const response = await fetch('http://127.0.0.1:3000/compare', {
+            const baseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000';
+            const response = await fetch(`${baseUrl}/compare`, {
                 method: 'POST',
                 body: formData,
             });
