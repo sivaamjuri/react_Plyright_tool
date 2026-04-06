@@ -648,7 +648,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
         // 3. Process Students in Batches
         const allResults = [];
-        const BATCH_SIZE = 1; // Lowered to 1 for AWS Free Tier (t3.micro) 1GB RAM limits
+        const BATCH_SIZE = 5; // Upgraded to 5 for m7i-flex.large AWS Server!
 
         sendProgress({ type: 'start', total: studentTasks.length });
 
