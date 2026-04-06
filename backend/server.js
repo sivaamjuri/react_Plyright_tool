@@ -607,7 +607,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
         new AdmZip(solutionFile.path).extractAllTo(solExtractDir, true);
 
         const solRoot = await findProjectRoot(solExtractDir);
-        const solPort = 4000 + Math.floor(Math.random() * 500);
+        const solPort = 14000 + Math.floor(Math.random() * 500);
         sendProgress({ type: 'status', message: 'Starting Solution Server...' });
         solServer = await startServer(solRoot, solPort); // Assign to solServer
 
@@ -683,7 +683,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
                     const t0 = performance.now();
                     const stuRoot = await findProjectRoot(stuExtractDir);
-                    const stuPort = 5000 + (i * 10) + (index + Math.floor(Math.random() * 100));
+                    const stuPort = 15000 + (i * 10) + (index + Math.floor(Math.random() * 100));
 
                     stuServer = await startServer(stuRoot, stuPort); // Assign to stuServer
                     tSetup = performance.now() - t0;
