@@ -19,7 +19,7 @@ const Home = () => {
         if (excelFile) formData.append('studentExcel', excelFile);
 
         try {
-            const baseUrl = import.meta.env.VITE_API_URL || 'http://52.66.72.41:3000';
+            const baseUrl = import.meta.env.VITE_API_URL || 'https://amendment-accustom-unhidden.ngrok-free.dev';
             const response = await fetch(`${baseUrl}/compare`, {
                 method: 'POST',
                 body: formData,
