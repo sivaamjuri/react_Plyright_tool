@@ -129,21 +129,21 @@ const Results = ({ data }) => {
                                         <div className="view-container">
                                             <div className="view-label">Reference Solution</div>
                                             <div className="image-wrapper">
-                                                <img src={`${import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000'}${info.solutionImage}`} alt="Solution" />
+                                                <img src={`${import.meta.env.VITE_API_URL || 'http://52.66.72.41:3000'}${info.solutionImage}`} alt="Solution" />
                                             </div>
                                         </div>
 
                                         <div className="view-container student">
                                             <div className="view-label">Student Submission</div>
                                             <div className="image-wrapper">
-                                                <img src={`${import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000'}${info.studentImage}`} alt="Student" />
+                                                <img src={`${import.meta.env.VITE_API_URL || 'http://52.66.72.41:3000'}${info.studentImage}`} alt="Student" />
                                             </div>
                                         </div>
 
                                         <div className="view-container diff">
                                             <div className="view-label">Visual Difference</div>
                                             <div className="image-wrapper">
-                                                <img src={`${import.meta.env.VITE_API_URL || 'http://127.0.0.1:3000'}${info.diffImage}`} alt="Difference" />
+                                                <img src={`${import.meta.env.VITE_API_URL || 'http://52.66.72.41:3000'}${info.diffImage}`} alt="Difference" />
                                             </div>
                                         </div>
                                     </div>
