@@ -36,7 +36,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 
 // Increase timeout to 2 hours
-server.timeout = 7200000; 
+server.timeout = 7200000;
 server.keepAliveTimeout = 7200000;
 server.headersTimeout = 7200000;
 
@@ -57,16 +57,6 @@ fs.ensureDirSync(TEMP_DIR);
 
 const upload = multer({ dest: UPLOADS_DIR });
 
-// Helper: Logging
-function log(msg) {
-    const logMsg = `[${new Date().toISOString()}] ${msg}\n`;
-    console.log(msg);
-    try {
-        fs.appendFileSync(path.join(__dirname, 'server.log'), logMsg);
-    } catch (e) {
-        console.error("Failed to write to log file:", e);
-    }
-}
 
 // Helper: Kill Process Safely
 function killProcess(proc) {
