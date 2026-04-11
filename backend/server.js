@@ -30,7 +30,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 
 // Increase timeout to 2 hours for large student batches
-server.timeout = 7200000; 
+server.timeout = 7200000;
 server.keepAliveTimeout = 7200000;
 server.headersTimeout = 7200000;
 app.use(express.json());
@@ -74,7 +74,7 @@ function killProcess(proc) {
             killer.on('close', () => {
                 try {
                     process.kill(proc.pid, 'SIGKILL');
-                } catch (e) {}
+                } catch (e) { }
             });
         }
     } catch (e) {
@@ -715,45 +715,45 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                     await captureScreenshots(stuServer.baseUrl, routes, stuScreenshotDir);
                     tScreenshot = performance.now() - t1;
 
-                        // Compare
-                        const pageResults = {};
-                        let totalScore = 0;
+                    // Compare
+                    const pageResults = {};
+                    let totalScore = 0;
 
-                        const t2 = performance.now();
-                        const solutionBase64Cache = {}; // Cache to avoid redundant encoding
+                    const t2 = performance.now();
+                    const solutionBase64Cache = {}; // Cache to avoid redundant encoding
 
-                        for (const route of routes) {
-                            const fileName = route === '/' ? 'index.png' : `${route.replace(/\//g, '')}.png`;
-                            const solImg = path.join(solScreenshotDir, fileName);
-                            const stuImg = path.join(stuScreenshotDir, fileName);
-                            const diffImg = path.join(diffScreenshotDir, fileName);
+                    for (const route of routes) {
+                        const fileName = route === '/' ? 'index.png' : `${route.replace(/\//g, '')}.png`;
+                        const solImg = path.join(solScreenshotDir, fileName);
+                        const stuImg = path.join(stuScreenshotDir, fileName);
+                        const diffImg = path.join(diffScreenshotDir, fileName);
 
-                            const score = compareImages(solImg, stuImg, diffImg);
-                            const name = route === '/' ? 'Home Page' : route;
+                        const score = compareImages(solImg, stuImg, diffImg);
+                        const name = route === '/' ? 'Home Page' : route;
 
-                            // Convert images to Base64 with logging
-                            const toBase64 = (filePath, tag) => {
-                                if (fs.existsSync(filePath)) {
-                                    const base64 = fs.readFileSync(filePath).toString('base64');
-                                    log(`[Base64] Encoded ${tag} (${filePath}): ${Math.round(base64.length / 1024)}KB`);
-                                    return `data:image/png;base64,${base64}`;
-                                }
-                                log(`[Base64] WARNING: File NOT found: ${filePath}`);
-                                return null;
-                            };
-
-                            if (!solutionBase64Cache[fileName]) {
-                                solutionBase64Cache[fileName] = toBase64(solImg, 'Solution');
+                        // Convert images to Base64 with logging
+                        const toBase64 = (filePath, tag) => {
+                            if (fs.existsSync(filePath)) {
+                                const base64 = fs.readFileSync(filePath).toString('base64');
+                                log(`[Base64] Encoded ${tag} (${filePath}): ${Math.round(base64.length / 1024)}KB`);
+                                return `data:image/png;base64,${base64}`;
                             }
+                            log(`[Base64] WARNING: File NOT found: ${filePath}`);
+                            return null;
+                        };
 
-                            pageResults[name] = {
-                                score: `${score}%`,
-                                diffImage: toBase64(diffImg, 'Diff'),
-                                studentImage: toBase64(stuImg, 'Student'),
-                                solutionImage: solutionBase64Cache[fileName]
-                            };
-                            totalScore += parseFloat(score);
+                        if (!solutionBase64Cache[fileName]) {
+                            solutionBase64Cache[fileName] = toBase64(solImg, 'Solution');
                         }
+
+                        pageResults[name] = {
+                            score: `${score}%`,
+                            diffImage: toBase64(diffImg, 'Diff'),
+                            studentImage: toBase64(stuImg, 'Student'),
+                            solutionImage: solutionBase64Cache[fileName]
+                        };
+                        totalScore += parseFloat(score);
+                    }
                     tCompare = performance.now() - t2;
 
                     let finalOverall = (totalScore / routes.length);
@@ -823,29 +823,8 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
             }
         });
         res.end();
-
-        } finally {
-            // Delete the entire run directory after the request ends (success or error)
-            if (runDir) {
-                await fs.remove(runDir).catch(e => log(`Crucial Cleanup Error: ${e.message}`));
-                log(`[Final Cleanup] Wiped ${runDir}`);
-            }
-
-            // Cleanup any surviving solution server processes
-            if (solServer?.process) {
-                killProcess(solServer.process);
-            }
-
-            // Cleanup raw upload files
-            if (solutionFile?.path) await fs.remove(solutionFile.path).catch(() => {});
-            if (studentFiles) {
-                for (const file of studentFiles) {
-                    await fs.remove(file.path).catch(() => {});
-                }
-            }
-            if (studentExcel?.path) await fs.remove(studentExcel.path).catch(() => {});
-        }
-    } catch (error) {
+    }
+    catch (error) {
         log(`Fatal error in /compare: ${error.message}`);
         if (!res.headersSent) {
             res.status(500).json({ error: error.message });
@@ -853,6 +832,26 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
             res.write(JSON.stringify({ type: 'error', message: error.message }) + '\n');
             res.end();
         }
+    } finally {
+        // Delete the entire run directory after the request ends (success or error)
+        if (runDir) {
+            await fs.remove(runDir).catch(e => log(`Crucial Cleanup Error: ${e.message}`));
+            log(`[Final Cleanup] Wiped ${runDir}`);
+        }
+
+        // Cleanup any surviving solution server processes
+        if (solServer?.process) {
+            killProcess(solServer.process);
+        }
+
+        // Cleanup raw upload files
+        if (solutionFile?.path) await fs.remove(solutionFile.path).catch(() => { });
+        if (studentFiles) {
+            for (const file of studentFiles) {
+                await fs.remove(file.path).catch(() => { });
+            }
+        }
+        if (studentExcel?.path) await fs.remove(studentExcel.path).catch(() => { });
     }
 });
 
