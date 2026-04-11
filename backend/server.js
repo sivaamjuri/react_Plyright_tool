@@ -79,6 +79,7 @@ async function downloadRepoAsZip(repoUrl, outputPath) {
         const response = await axios({
             method: 'get',
             url: zipUrl,
+            headers: { 'ngrok-skip-browser-warning': 'true' },
             responseType: 'stream',
             timeout: 30000,
             validateStatus: (status) => status === 200
@@ -438,7 +439,7 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
             // Use axios for better control over timeouts and errors, bypassing any proxies
             await axios.get(url, {
                 timeout: 2000,
-                headers: { 'Accept': 'text/html' },
+                headers: { 'Accept': 'text/html', 'ngrok-skip-browser-warning': 'true' },
                 validateStatus: (status) => status >= 200 && status < 500,
                 proxy: false // Avoid proxy issues on local connections
             });
@@ -449,7 +450,7 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
             if (attempts === 5) {
                 try {
                     const localUrl = `http://localhost:${port}${basePath}`;
-                    await axios.get(localUrl, { timeout: 1000, proxy: false });
+                    await axios.get(localUrl, { timeout: 1000, proxy: false, headers: { 'ngrok-skip-browser-warning': 'true' } });
                     log(`[${port}] Server ready at ${localUrl}`);
                     return resolve({ process: serverProcess, baseUrl: `http://127.0.0.1:${port}${basePath}` });
                 } catch (err) { }
@@ -712,11 +713,19 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                         const score = compareImages(solImg, stuImg, diffImg);
                         const name = route === '/' ? 'Home Page' : route;
 
+                        // Convert images to Base64
+                        const toBase64 = (filePath) => {
+                            if (fs.existsSync(filePath)) {
+                                return `data:image/png;base64,${fs.readFileSync(filePath).toString('base64')}`;
+                            }
+                            return null;
+                        };
+
                         pageResults[name] = {
                             score: `${score}%`,
-                            diffImage: `/temp/${runId}/${stuId}/diffs/${fileName}`,
-                            studentImage: `/temp/${runId}/${stuId}/screenshots/${fileName}`,
-                            solutionImage: `/temp/${runId}/solution/screenshots/${fileName}`
+                            diffImage: toBase64(diffImg),
+                            studentImage: toBase64(stuImg),
+                            solutionImage: toBase64(solImg)
                         };
                         totalScore += parseFloat(score);
                     }
