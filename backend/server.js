@@ -11,6 +11,9 @@ const axios = require('axios');
 const { performance } = require('perf_hooks');
 const ExcelJS = require('exceljs');
 const unzipper = require('unzipper');
+const os = require('os');
+const xlsx = require('xlsx');
+const AdmZip = require('adm-zip');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
