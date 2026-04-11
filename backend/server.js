@@ -778,6 +778,10 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                     if (stuServer?.process) {
                         killProcess(stuServer.process);
                     }
+                    // DISK CLEANUP: Delete the extracted project to avoid filling up AWS disk
+                    const stuWorkDir = path.join(runDir, stuId);
+                    await fs.remove(stuWorkDir).catch(e => log(`Cleanup error for ${stuId}: ${e.message}`));
+                    log(`[Cleanup] Deleted ${stuId} to free up disk space.`);
                 }
             });
 
@@ -807,32 +811,36 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
         });
         res.end();
 
+        } finally {
+            // Delete the entire run directory after the request ends (success or error)
+            if (runDir) {
+                await fs.remove(runDir).catch(e => log(`Crucial Cleanup Error: ${e.message}`));
+                log(`[Final Cleanup] Wiped ${runDir}`);
+            }
+
+            // Cleanup any surviving solution server processes
+            if (solServer?.process) {
+                killProcess(solServer.process);
+            }
+
+            // Cleanup raw upload files
+            if (solutionFile?.path) await fs.remove(solutionFile.path).catch(() => {});
+            if (studentFiles) {
+                for (const file of studentFiles) {
+                    await fs.remove(file.path).catch(() => {});
+                }
+            }
+            if (studentExcel?.path) await fs.remove(studentExcel.path).catch(() => {});
+        }
     } catch (error) {
         log(`Fatal error in /compare: ${error.message}`);
-        // Avoid sending 500 if we already started streaming
         if (!res.headersSent) {
             res.status(500).json({ error: error.message });
         } else {
             res.write(JSON.stringify({ type: 'error', message: error.message }) + '\n');
             res.end();
         }
-    } finally {
-        // Cleanup processes just in case
-        if (solServer?.process) {
-            killProcess(solServer.process);
-        }
-
-        // Clean uploads
-        if (solutionFile && solutionFile.path) {
-            await fs.remove(solutionFile.path).catch(e => console.error(e));
-        }
-        if (studentFiles) {
-            for (const file of studentFiles) {
-                await fs.remove(file.path).catch(e => console.error(e));
-            }
-        }
     }
-
 });
 
 app.listen(PORT, () => {
