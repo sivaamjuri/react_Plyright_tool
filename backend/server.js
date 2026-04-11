@@ -16,7 +16,10 @@ const os = require('os');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    allowedHeaders: ['Content-Type', 'ngrok-skip-browser-warning']
+}));
 app.use(express.json());
 
 // Log all requests
