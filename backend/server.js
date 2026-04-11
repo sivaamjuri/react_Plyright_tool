@@ -1,38 +1,45 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const AdmZip = require('adm-zip');
 const path = require('path');
 const fs = require('fs-extra');
 const { chromium } = require('playwright');
-const PNG = require('pngjs').PNG;
 const pixelmatch = require('pixelmatch');
-const { spawn } = require('child_process');
-const xlsx = require('xlsx');
+const { PNG } = require('pngjs');
+const { spawn, exec } = require('child_process');
 const axios = require('axios');
 const { performance } = require('perf_hooks');
-const os = require('os');
+const ExcelJS = require('exceljs');
+const unzipper = require('unzipper');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const log = (msg) => {
+    console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
+};
+
+// MUST BE FIRST: Extremely open CORS for debugging
 app.use(cors({
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning']
+    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
+    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204
 }));
 
-// Explicitly handle preflight requests
+// Explicitly handle ALL options requests globally
 app.options('*', cors());
 
 const server = app.listen(PORT, '0.0.0.0', () => {
     log(`Server running on http://localhost:${PORT}`);
 });
 
-// Increase timeout to 2 hours for large student batches
-server.timeout = 7200000;
+// Increase timeout to 2 hours
+server.timeout = 7200000; 
 server.keepAliveTimeout = 7200000;
 server.headersTimeout = 7200000;
+
 app.use(express.json());
 
 // Log all requests
