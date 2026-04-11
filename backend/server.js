@@ -18,8 +18,21 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors({
     origin: '*',
-    allowedHeaders: ['Content-Type', 'ngrok-skip-browser-warning']
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning']
 }));
+
+// Explicitly handle preflight requests
+app.options('*', cors());
+
+const server = app.listen(PORT, '0.0.0.0', () => {
+    log(`Server running on http://localhost:${PORT}`);
+});
+
+// Increase timeout to 2 hours for large student batches
+server.timeout = 7200000; 
+server.keepAliveTimeout = 7200000;
+server.headersTimeout = 7200000;
 app.use(express.json());
 
 // Log all requests
@@ -843,6 +856,4 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
     }
 });
 
-app.listen(PORT, () => {
-    log(`Server running on http://localhost:${PORT}`);
-});
+
