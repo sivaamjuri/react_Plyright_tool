@@ -652,7 +652,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
         // 3. Process Students in Batches
         const allResults = [];
-        const BATCH_SIZE = 5; // Upgraded to 5 for m7i-flex.large AWS Server!
+        const BATCH_SIZE = 1; // SAFE MODE: Only 1 at a time for AWS Free Tier/Small servers!
 
         sendProgress({ type: 'start', total: studentTasks.length });
 
