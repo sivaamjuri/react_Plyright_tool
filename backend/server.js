@@ -702,36 +702,45 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                     await captureScreenshots(stuServer.baseUrl, routes, stuScreenshotDir);
                     tScreenshot = performance.now() - t1;
 
-                    // Compare
-                    const pageResults = {};
-                    let totalScore = 0;
+                        // Compare
+                        const pageResults = {};
+                        let totalScore = 0;
 
-                    const t2 = performance.now();
-                    for (const route of routes) {
-                        const fileName = route === '/' ? 'index.png' : `${route.replace(/\//g, '')}.png`;
-                        const solImg = path.join(solScreenshotDir, fileName);
-                        const stuImg = path.join(stuScreenshotDir, fileName);
-                        const diffImg = path.join(diffScreenshotDir, fileName);
+                        const t2 = performance.now();
+                        const solutionBase64Cache = {}; // Cache to avoid redundant encoding
 
-                        const score = compareImages(solImg, stuImg, diffImg);
-                        const name = route === '/' ? 'Home Page' : route;
+                        for (const route of routes) {
+                            const fileName = route === '/' ? 'index.png' : `${route.replace(/\//g, '')}.png`;
+                            const solImg = path.join(solScreenshotDir, fileName);
+                            const stuImg = path.join(stuScreenshotDir, fileName);
+                            const diffImg = path.join(diffScreenshotDir, fileName);
 
-                        // Convert images to Base64
-                        const toBase64 = (filePath) => {
-                            if (fs.existsSync(filePath)) {
-                                return `data:image/png;base64,${fs.readFileSync(filePath).toString('base64')}`;
+                            const score = compareImages(solImg, stuImg, diffImg);
+                            const name = route === '/' ? 'Home Page' : route;
+
+                            // Convert images to Base64 with logging
+                            const toBase64 = (filePath, tag) => {
+                                if (fs.existsSync(filePath)) {
+                                    const base64 = fs.readFileSync(filePath).toString('base64');
+                                    log(`[Base64] Encoded ${tag} (${filePath}): ${Math.round(base64.length / 1024)}KB`);
+                                    return `data:image/png;base64,${base64}`;
+                                }
+                                log(`[Base64] WARNING: File NOT found: ${filePath}`);
+                                return null;
+                            };
+
+                            if (!solutionBase64Cache[fileName]) {
+                                solutionBase64Cache[fileName] = toBase64(solImg, 'Solution');
                             }
-                            return null;
-                        };
 
-                        pageResults[name] = {
-                            score: `${score}%`,
-                            diffImage: toBase64(diffImg),
-                            studentImage: toBase64(stuImg),
-                            solutionImage: toBase64(solImg)
-                        };
-                        totalScore += parseFloat(score);
-                    }
+                            pageResults[name] = {
+                                score: `${score}%`,
+                                diffImage: toBase64(diffImg, 'Diff'),
+                                studentImage: toBase64(stuImg, 'Student'),
+                                solutionImage: solutionBase64Cache[fileName]
+                            };
+                            totalScore += parseFloat(score);
+                        }
                     tCompare = performance.now() - t2;
 
                     let finalOverall = (totalScore / routes.length);
