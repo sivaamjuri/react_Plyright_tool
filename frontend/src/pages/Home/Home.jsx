@@ -22,6 +22,9 @@ const Home = () => {
             const baseUrl = import.meta.env.VITE_API_URL || 'https://amendment-accustom-unhidden.ngrok-free.dev';
             const response = await fetch(`${baseUrl}/compare`, {
                 method: 'POST',
+                headers: {
+                    'ngrok-skip-browser-warning': 'true'
+                },
                 body: formData,
             });
 
