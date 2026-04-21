@@ -19,12 +19,11 @@ const Home = () => {
         if (excelFile) formData.append('studentExcel', excelFile);
 
         try {
-            const baseUrl = import.meta.env.VITE_API_URL || 'https://amendment-accustom-unhidden.ngrok-free.dev';
+            const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:3000').replace(/\/$/, '');
+            const isNgrok = baseUrl.includes('ngrok-free.dev') || baseUrl.includes('ngrok.io');
             const response = await fetch(`${baseUrl}/compare`, {
                 method: 'POST',
-                headers: {
-                    'ngrok-skip-browser-warning': 'true'
-                },
+                headers: isNgrok ? { 'ngrok-skip-browser-warning': 'true' } : {},
                 body: formData,
             });
 
@@ -82,7 +81,10 @@ const Home = () => {
             }
         } catch (error) {
             console.error(error);
-            alert(`Error: ${error.message}`);
+            const message = error?.message === 'Failed to fetch'
+                ? 'Cannot reach backend. Make sure API is running and VITE_API_URL points to a valid URL.'
+                : error.message;
+            alert(`Error: ${message}`);
         } finally {
             setIsLoading(false);
             setProgress(prev => ({ ...prev, type: 'idle' }));

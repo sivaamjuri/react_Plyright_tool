@@ -101,4 +101,46 @@ VR_PROJECT/
 
 ---
 
+## Deploy (Backend AWS + Frontend Vercel)
+
+### 1) Deploy backend to AWS (EC2)
+1. Launch an Ubuntu EC2 instance and open inbound rules for:
+   - `22` (SSH) from your IP
+   - `3000` (or `80/443` via reverse proxy)
+2. SSH into EC2 and install Node.js 20+.
+3. Copy backend code to server and run:
+```bash
+cd backend
+npm install
+npx playwright install chromium
+cp .env.example .env
+```
+4. Edit `.env`:
+```env
+PORT=3000
+CORS_ORIGINS=https://your-frontend.vercel.app,http://localhost:5173
+```
+5. Start backend with PM2:
+```bash
+npm i -g pm2
+pm2 start server.js --name ui-checker-backend
+pm2 save
+pm2 startup
+```
+
+### 2) Deploy frontend to Vercel
+1. Import the `frontend` folder as a Vercel project.
+2. Framework preset: **Vite**.
+3. Set environment variable in Vercel:
+   - `VITE_API_URL=https://your-backend-domain-or-ip:3000`
+4. Deploy.
+
+### 3) If you use a domain (recommended)
+- Put Nginx in front of backend and enable HTTPS with Certbot.
+- Then set:
+  - Backend `.env` `CORS_ORIGINS=https://your-frontend.vercel.app`
+  - Vercel `VITE_API_URL=https://api.yourdomain.com`
+
+---
+
 Developed as an advanced agentic coding solution. 🚀

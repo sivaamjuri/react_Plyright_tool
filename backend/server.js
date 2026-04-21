@@ -18,21 +18,34 @@ const AdmZip = require('adm-zip');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const parseAllowedOrigins = () => {
+    const raw = process.env.CORS_ORIGINS;
+    if (!raw) return ['http://localhost:5173'];
+    return raw.split(',').map((origin) => origin.trim()).filter(Boolean);
+};
+
+const ALLOWED_ORIGINS = parseAllowedOrigins();
+
 const log = (msg) => {
     console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 };
 
-// MUST BE FIRST: Extremely open CORS for debugging
+// MUST BE FIRST: CORS for local + deployed frontend
 app.use(cors({
-    origin: '*',
+    origin(origin, callback) {
+        // Allow non-browser requests (no Origin header)
+        if (!origin) return callback(null, true);
+        if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+        return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'],
     preflightContinue: false,
     optionsSuccessStatus: 204
 }));
 
-// Explicitly handle ALL options requests globally
-app.options('*', cors());
+// Express 5 no longer accepts "*" here; regex works for all routes.
+app.options(/.*/, cors());
 
 const server = app.listen(PORT, '0.0.0.0', () => {
     log(`Server running on http://localhost:${PORT}`);
@@ -482,9 +495,10 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
 }
 
 // Helper: Capture Screenshots
-async function captureScreenshots(baseUrl, routes, outputDir) {
+async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = null) {
     await fs.ensureDir(outputDir);
-    const browser = await chromium.launch();
+    const ownBrowser = !sharedBrowser;
+    const browser = sharedBrowser || await chromium.launch();
     const page = await browser.newPage();
 
     for (const route of routes) {
@@ -496,13 +510,13 @@ async function captureScreenshots(baseUrl, routes, outputDir) {
         try {
             log(`Navigating to ${url}...`);
             await page.setViewportSize({ width: 1280, height: 800 });
-            await page.goto(url, { waitUntil: 'networkidle' });
+            await page.goto(url, { waitUntil: 'load', timeout: 30000 });
 
             // Inject CSS to disable animations/transitions
             await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; caret-color: transparent !important; }' });
 
-            // Wait a moment for any dynamic layout to settle
-            await page.waitForTimeout(1000);
+            // Small settle delay for dynamic layout without adding too much latency
+            await page.waitForTimeout(300);
 
             await page.screenshot({ path: savePath, fullPage: true });
         } catch (e) {
@@ -510,7 +524,10 @@ async function captureScreenshots(baseUrl, routes, outputDir) {
         }
     }
 
-    await browser.close();
+    await page.close();
+    if (ownBrowser) {
+        await browser.close();
+    }
 }
 
 // Helper: Normalize image size by padding with transparency
@@ -616,8 +633,11 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
     const startOverall = performance.now();
 
     let solServer; // Declare solServer here to be accessible in finally block
+    let sharedBrowser; // Reuse one Playwright browser per compare run
 
     try {
+        sharedBrowser = await chromium.launch();
+
         // 1. Prepare Solution (Once)
         sendProgress({ type: 'status', message: 'Extracting Solution ZIP...' });
         await fs.ensureDir(solExtractDir);
@@ -633,7 +653,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
         sendProgress({ type: 'status', message: 'Capturing Solution Screenshots...' });
         const routes = ['/'];
-        await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir);
+        await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir, sharedBrowser);
 
         // FREE UP RAM FOR AWS t3.micro: Kill the solution server immediately after screenshots!
         if (solServer?.process) {
@@ -712,7 +732,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                     tSetup = performance.now() - t0;
 
                     const t1 = performance.now();
-                    await captureScreenshots(stuServer.baseUrl, routes, stuScreenshotDir);
+                    await captureScreenshots(stuServer.baseUrl, routes, stuScreenshotDir, sharedBrowser);
                     tScreenshot = performance.now() - t1;
 
                     // Compare
@@ -842,6 +862,10 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
         // Cleanup any surviving solution server processes
         if (solServer?.process) {
             killProcess(solServer.process);
+        }
+
+        if (sharedBrowser) {
+            await sharedBrowser.close().catch(() => { });
         }
 
         // Cleanup raw upload files
