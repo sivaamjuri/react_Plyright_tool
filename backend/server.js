@@ -756,6 +756,10 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
         const BATCH_SIZE = 1; // SAFE MODE: Only 1 at a time for AWS Free Tier/Small servers!
 
         sendProgress({ type: 'start', total: studentTasks.length });
+        sendProgress({
+            type: 'status',
+            message: `Queued ${studentTasks.length} project(s) — processing sequentially (one at a time).`
+        });
 
         for (let i = 0; i < studentTasks.length; i += BATCH_SIZE) {
             const batch = studentTasks.slice(i, i + BATCH_SIZE);
@@ -766,6 +770,8 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                 const stuExtractDir = path.join(runDir, stuId, 'raw');
                 const stuScreenshotDir = path.join(runDir, stuId, 'screenshots');
                 const diffScreenshotDir = path.join(runDir, stuId, 'diffs');
+                const projectNum = i + index + 1;
+                const projectTotal = studentTasks.length;
 
                 const tStart = performance.now();
                 let tUnzip = 0, tSetup = 0, tScreenshot = 0, tCompare = 0;
@@ -776,10 +782,27 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
                     log(`Processing ${task.name}...`);
 
+                    sendProgress({
+                        type: 'pipeline',
+                        projectIndex: projectNum,
+                        projectTotal,
+                        studentName: task.name,
+                        phase: 'extract',
+                        message: 'Extracting archive and preparing workspace…'
+                    });
+
                     const tUnzipStart = performance.now();
                     let zipPath = task.path;
 
                     if (task.type === 'repo') {
+                        sendProgress({
+                            type: 'pipeline',
+                            projectIndex: projectNum,
+                            projectTotal,
+                            studentName: task.name,
+                            phase: 'fetch',
+                            message: 'Downloading repository as .zip…'
+                        });
                         zipPath = path.join(runDir, `${stuId}_repo.zip`);
                         await downloadRepoAsZip(task.path, zipPath);
                     }
@@ -796,12 +819,39 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                     const stuRoot = await findProjectRoot(stuExtractDir);
                     const stuPort = 15000 + (i * 10) + (index + Math.floor(Math.random() * 100));
 
+                    sendProgress({
+                        type: 'pipeline',
+                        projectIndex: projectNum,
+                        projectTotal,
+                        studentName: task.name,
+                        phase: 'server',
+                        message: 'Starting local dev server (Vite/React)…'
+                    });
+
                     stuServer = await startServer(stuRoot, stuPort); // Assign to stuServer
                     tSetup = performance.now() - t0;
+
+                    sendProgress({
+                        type: 'pipeline',
+                        projectIndex: projectNum,
+                        projectTotal,
+                        studentName: task.name,
+                        phase: 'screenshots',
+                        message: 'Taking UI screenshots (Playwright)…'
+                    });
 
                     const t1 = performance.now();
                     await captureScreenshots(stuServer.baseUrl, routes, stuScreenshotDir, sharedBrowser);
                     tScreenshot = performance.now() - t1;
+
+                    sendProgress({
+                        type: 'pipeline',
+                        projectIndex: projectNum,
+                        projectTotal,
+                        studentName: task.name,
+                        phase: 'compare',
+                        message: 'Comparing pixels against reference screenshots…'
+                    });
 
                     // Compare
                     const pageResults = {};
@@ -850,6 +900,16 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                     const totalTimeNum = performance.now() - tStart;
 
                     const scoreNum = Math.round(finalOverall).toFixed(0);
+
+                    sendProgress({
+                        type: 'pipeline',
+                        projectIndex: projectNum,
+                        projectTotal,
+                        studentName: task.name,
+                        phase: 'complete',
+                        message: `Validation complete — overall match ${scoreNum}%.`
+                    });
+
                     return {
                         studentName: task.name,
                         repoUrl: task.type === 'repo' ? task.path : 'N/A (Uploaded ZIP)',
@@ -867,6 +927,14 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                     };
                 } catch (err) {
                     log(`Failed to process ${task.name}: ${err.message}`);
+                    sendProgress({
+                        type: 'pipeline',
+                        projectIndex: projectNum,
+                        projectTotal,
+                        studentName: task.name,
+                        phase: 'error',
+                        message: `Stopped: ${err.message}`
+                    });
                     return {
                         studentName: task.name,
                         repoUrl: task.type === 'repo' ? task.path : 'N/A (Uploaded ZIP)',

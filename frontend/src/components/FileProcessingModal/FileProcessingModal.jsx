@@ -35,6 +35,24 @@ function tagClass(tag) {
   }
 }
 
+function tagForPipelinePhase(phase) {
+  if (phase === "error") return "WARN";
+  if (phase === "complete") return "SUCCESS";
+  return "RUNNING";
+}
+
+function formatPipelineLine(e) {
+  const raw = (e.studentName || "submission").replace(/\\/g, "/");
+  const base = raw.includes("/") ? raw.split("/").pop() : raw;
+  const short =
+    base.length > 44 ? `${base.slice(0, 20)}…${base.slice(-20)}` : base;
+  const idx =
+    e.projectTotal != null && e.projectIndex != null
+      ? `Project ${e.projectIndex}/${e.projectTotal}`
+      : "Project";
+  return `${idx} · ${short} — ${e.message || "—"}`;
+}
+
 /**
  * Premium full-screen loading modal: dual-ring spinner, live terminal, gradient progress.
  */
@@ -43,6 +61,7 @@ export default function FileProcessingModal({ open, progress, statusLine }) {
   const terminalRef = useRef(null);
   const prevSigRef = useRef("");
   const completedLenRef = useRef(0);
+  const pipelineIxRef = useRef(0);
 
   const phase = progress?.message || statusLine || "Preparing workspace…";
 
@@ -71,8 +90,10 @@ export default function FileProcessingModal({ open, progress, statusLine }) {
       setLines([]);
       prevSigRef.current = "";
       completedLenRef.current = 0;
+      pipelineIxRef.current = 0;
       return;
     }
+    pipelineIxRef.current = 0;
     setLines([
       {
         id: "boot-1",
@@ -90,6 +111,17 @@ export default function FileProcessingModal({ open, progress, statusLine }) {
     prevSigRef.current = "";
     completedLenRef.current = progress?.completedStudents?.length ?? 0;
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const evs = progress?.pipelineEvents;
+    if (!evs?.length) return;
+    while (pipelineIxRef.current < evs.length) {
+      const e = evs[pipelineIxRef.current];
+      pipelineIxRef.current += 1;
+      pushLine(formatPipelineLine(e), tagForPipelinePhase(e.phase));
+    }
+  }, [open, progress?.pipelineEvents, pushLine]);
 
   useEffect(() => {
     if (!open) return;

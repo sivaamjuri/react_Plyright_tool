@@ -14,6 +14,7 @@ const Home = () => {
     message: "",
     type: "idle",
     completedStudents: [],
+    pipelineEvents: [],
   });
 
   const handleAnalyze = async (solutionFile, studentFiles, excelFile) => {
@@ -25,6 +26,7 @@ const Home = () => {
       message: "Initializing...",
       type: "status",
       completedStudents: [],
+      pipelineEvents: [],
     });
 
     const formData = new FormData();
@@ -67,8 +69,24 @@ const Home = () => {
             setProgress((prev) => ({
               ...prev,
               message: json.message || prev.message,
+              current:
+                json.current !== undefined ? json.current : prev.current,
               total: json.total !== undefined ? json.total : prev.total,
               type: json.type,
+            }));
+          } else if (json.type === "pipeline") {
+            setProgress((prev) => ({
+              ...prev,
+              pipelineEvents: [
+                ...(prev.pipelineEvents || []),
+                {
+                  projectIndex: json.projectIndex,
+                  projectTotal: json.projectTotal,
+                  studentName: json.studentName,
+                  phase: json.phase,
+                  message: json.message,
+                },
+              ],
             }));
           } else if (json.type === "student_complete") {
             setProgress((prev) => ({
