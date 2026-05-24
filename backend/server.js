@@ -563,7 +563,8 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
 }
 
 // Helper: Capture Screenshots
-async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = null) {
+// onRouteProgress: optional ({ kind: 'start'|'done', route, pageLabel, fileName, ok?, error? }) => void
+async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = null, onRouteProgress = null) {
     await fs.ensureDir(outputDir);
     const ownBrowser = !sharedBrowser;
     const browser = sharedBrowser || await chromium.launch();
@@ -573,9 +574,13 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
         const url = `${baseUrl}${route}`;
         // Handle route name for file (remove slashes)
         const fileName = route === '/' ? 'index.png' : `${route.replace(/\//g, '')}.png`;
+        const pageLabel = route === '/' ? 'Home Page' : route;
         const savePath = path.join(outputDir, fileName);
 
         try {
+            if (onRouteProgress) {
+                onRouteProgress({ kind: 'start', route, pageLabel, fileName });
+            }
             log(`Navigating to ${url}...`);
             await page.setViewportSize({ width: 1280, height: 800 });
             await page.goto(url, { waitUntil: 'load', timeout: 30000 });
@@ -587,8 +592,14 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
             await page.waitForTimeout(300);
 
             await page.screenshot({ path: savePath, fullPage: true });
+            if (onRouteProgress) {
+                onRouteProgress({ kind: 'done', route, pageLabel, fileName, ok: true });
+            }
         } catch (e) {
             log(`Failed to capture ${url}: ${e.message}`);
+            if (onRouteProgress) {
+                onRouteProgress({ kind: 'done', route, pageLabel, fileName, ok: false, error: e.message });
+            }
         }
     }
 
@@ -721,7 +732,39 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
         sendProgress({ type: 'status', message: 'Capturing Solution Screenshots...' });
         const routes = ['/'];
-        await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir, sharedBrowser);
+        await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir, sharedBrowser, (evt) => {
+            if (evt.kind === 'start') {
+                sendProgress({
+                    type: 'pipeline',
+                    scope: 'reference',
+                    projectIndex: 0,
+                    projectTotal: 0,
+                    studentName: 'Reference solution',
+                    phase: 'screenshot_capture',
+                    message: `Capturing ${evt.pageLabel} (${evt.route}) → ${evt.fileName}…`
+                });
+            } else if (evt.ok) {
+                sendProgress({
+                    type: 'pipeline',
+                    scope: 'reference',
+                    projectIndex: 0,
+                    projectTotal: 0,
+                    studentName: 'Reference solution',
+                    phase: 'screenshot_saved',
+                    message: `Screenshot saved — ${evt.fileName} (${evt.pageLabel})`
+                });
+            } else {
+                sendProgress({
+                    type: 'pipeline',
+                    scope: 'reference',
+                    projectIndex: 0,
+                    projectTotal: 0,
+                    studentName: 'Reference solution',
+                    phase: 'screenshot_failed',
+                    message: `Screenshot failed — ${evt.fileName}: ${evt.error || 'unknown error'}`
+                });
+            }
+        });
 
         // FREE UP RAM FOR AWS t3.micro: Kill the solution server immediately after screenshots!
         if (solServer?.process) {
@@ -805,10 +848,32 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                         });
                         zipPath = path.join(runDir, `${stuId}_repo.zip`);
                         await downloadRepoAsZip(task.path, zipPath);
+                        sendProgress({
+                            type: 'pipeline',
+                            projectIndex: projectNum,
+                            projectTotal,
+                            studentName: task.name,
+                            phase: 'fetch_done',
+                            message: 'Repository .zip downloaded — extracting…'
+                        });
                     }
 
                     new AdmZip(zipPath).extractAllTo(stuExtractDir, true);
                     tUnzip = performance.now() - tUnzipStart;
+
+                    try {
+                        const rootEntries = await fs.readdir(stuExtractDir);
+                        sendProgress({
+                            type: 'pipeline',
+                            projectIndex: projectNum,
+                            projectTotal,
+                            studentName: task.name,
+                            phase: 'extract_detail',
+                            message: `Archive extracted — ${rootEntries.length} item(s) at workspace root.`
+                        });
+                    } catch {
+                        /* ignore */
+                    }
 
                     // Clean up downloaded zip if it's a repo
                     if (task.type === 'repo') {
@@ -817,6 +882,14 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
                     const t0 = performance.now();
                     const stuRoot = await findProjectRoot(stuExtractDir);
+                    sendProgress({
+                        type: 'pipeline',
+                        projectIndex: projectNum,
+                        projectTotal,
+                        studentName: task.name,
+                        phase: 'workspace',
+                        message: `Project root: ${path.basename(stuRoot)}`
+                    });
                     const stuPort = 15000 + (i * 10) + (index + Math.floor(Math.random() * 100));
 
                     sendProgress({
@@ -836,12 +909,50 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                         projectIndex: projectNum,
                         projectTotal,
                         studentName: task.name,
+                        phase: 'server_ready',
+                        message: `Dev server ready — ${stuServer.baseUrl}`
+                    });
+
+                    sendProgress({
+                        type: 'pipeline',
+                        projectIndex: projectNum,
+                        projectTotal,
+                        studentName: task.name,
                         phase: 'screenshots',
                         message: 'Taking UI screenshots (Playwright)…'
                     });
 
                     const t1 = performance.now();
-                    await captureScreenshots(stuServer.baseUrl, routes, stuScreenshotDir, sharedBrowser);
+                    await captureScreenshots(stuServer.baseUrl, routes, stuScreenshotDir, sharedBrowser, (evt) => {
+                        if (evt.kind === 'start') {
+                            sendProgress({
+                                type: 'pipeline',
+                                projectIndex: projectNum,
+                                projectTotal,
+                                studentName: task.name,
+                                phase: 'screenshot_capture',
+                                message: `Capturing ${evt.pageLabel} (${evt.route}) → ${evt.fileName}…`
+                            });
+                        } else if (evt.ok) {
+                            sendProgress({
+                                type: 'pipeline',
+                                projectIndex: projectNum,
+                                projectTotal,
+                                studentName: task.name,
+                                phase: 'screenshot_saved',
+                                message: `Screenshot saved — ${evt.fileName} (${evt.pageLabel})`
+                            });
+                        } else {
+                            sendProgress({
+                                type: 'pipeline',
+                                projectIndex: projectNum,
+                                projectTotal,
+                                studentName: task.name,
+                                phase: 'screenshot_failed',
+                                message: `Screenshot failed — ${evt.fileName}: ${evt.error || 'unknown error'}`
+                            });
+                        }
+                    });
                     tScreenshot = performance.now() - t1;
 
                     sendProgress({
@@ -868,6 +979,15 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
                         const score = compareImages(solImg, stuImg, diffImg);
                         const name = route === '/' ? 'Home Page' : route;
+
+                        sendProgress({
+                            type: 'pipeline',
+                            projectIndex: projectNum,
+                            projectTotal,
+                            studentName: task.name,
+                            phase: 'compare_page',
+                            message: `Compare ${name} (${fileName}): ${score}% pixel match`
+                        });
 
                         // Convert images to Base64 with logging
                         const toBase64 = (filePath, tag) => {

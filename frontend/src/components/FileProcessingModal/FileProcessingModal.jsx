@@ -38,16 +38,30 @@ function tagClass(tag) {
 function tagForPipelinePhase(phase) {
   if (phase === "error") return "WARN";
   if (phase === "complete") return "SUCCESS";
+  if (
+    phase === "screenshot_saved" ||
+    phase === "server_ready" ||
+    phase === "compare_page" ||
+    phase === "fetch_done"
+  ) {
+    return "SUCCESS";
+  }
+  if (phase === "screenshot_failed") return "WARN";
   return "RUNNING";
 }
 
 function formatPipelineLine(e) {
+  if (e.scope === "reference") {
+    return `[Reference] ${e.message || "—"}`;
+  }
   const raw = (e.studentName || "submission").replace(/\\/g, "/");
   const base = raw.includes("/") ? raw.split("/").pop() : raw;
   const short =
     base.length > 44 ? `${base.slice(0, 20)}…${base.slice(-20)}` : base;
   const idx =
-    e.projectTotal != null && e.projectIndex != null
+    e.projectTotal != null &&
+    e.projectTotal > 0 &&
+    e.projectIndex != null
       ? `Project ${e.projectIndex}/${e.projectTotal}`
       : "Project";
   return `${idx} · ${short} — ${e.message || "—"}`;

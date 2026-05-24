@@ -85,6 +85,7 @@ const Home = () => {
                   studentName: json.studentName,
                   phase: json.phase,
                   message: json.message,
+                  scope: json.scope,
                 },
               ],
             }));
