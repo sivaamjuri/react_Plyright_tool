@@ -342,6 +342,29 @@ After you **git pull** the latest repo, `deploy/ec2-bootstrap.sh` applies this a
 
 ---
 
+### Many student ZIPs fail only on the deployed site (Nginx / size / time)
+
+If **8 projects work locally** but **all fail** (or you see **413**, **502**, **504**, empty response, or **Failed to fetch**) on production, the browser is still uploading **one big multipart request** to your API. Common causes:
+
+1. **Nginx `client_max_body_size`** (default often **1m**) — rejects large uploads before Node sees them. Raise it inside the `server { ... }` that proxies to port 3000, then `sudo nginx -t && sudo systemctl reload nginx`:
+
+```nginx
+client_max_body_size 500M;
+proxy_read_timeout 7200s;
+proxy_send_timeout 7200s;
+proxy_connect_timeout 75s;
+```
+
+2. **Backend limit** — the app enforces **`MAX_UPLOAD_MB` per file** (default **500** in `.env.example`). If any single ZIP is larger, increase it in `backend/.env` and restart PM2.
+
+3. **CORS** — if the browser console shows a CORS error, add your **exact** Vercel origin (including `https://`) to **`CORS_ORIGINS`** on the server and restart PM2.
+
+4. **RAM / disk on a small EC2** — eight heavy React installs in one run can OOM or fill disk; watch **`pm2 logs ui-similarity-api`** and **`df -h`**. Create React App (`react-scripts start`) is especially memory-hungry; prefer **t3.small** or larger, or set **`WEBPACK_DEV_HEAP_MB`** in `backend/.env` (see `.env.example`) and restart PM2.
+
+5. **Zip-slip** — older server builds could allow a crafted student `.zip` to overwrite reference files under the same run directory. Current code uses **safe extraction** and a **copy of reference screenshots** in `_reference_solution/` so comparisons stay consistent.
+
+---
+
 ## Part 2 — Frontend on Vercel
 
 ### 2.1 Push your code to GitHub

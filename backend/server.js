@@ -19,6 +19,12 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+/** Per-file cap for multipart (solution + each student zip + excel). Raise in .env if needed. */
+const MAX_UPLOAD_MB = Math.min(
+    2048,
+    Math.max(32, Number.parseInt(process.env.MAX_UPLOAD_MB || '500', 10) || 500)
+);
+
 const parseAllowedOrigins = () => {
     const raw = process.env.CORS_ORIGINS;
     if (!raw) return ['http://localhost:5173'];
@@ -30,6 +36,47 @@ const ALLOWED_ORIGINS = parseAllowedOrigins();
 const log = (msg) => {
     console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 };
+
+/**
+ * Extract only inside destDir (blocks ../ and absolute paths — prevents overwriting sibling dirs like solution/).
+ */
+function extractAdmZipSafe(zipPath, destDir) {
+    const zip = new AdmZip(zipPath);
+    const canonicalDest = path.resolve(destDir);
+    const canonicalPrefix = canonicalDest.endsWith(path.sep) ? canonicalDest : canonicalDest + path.sep;
+    let skipped = 0;
+    for (const entry of zip.getEntries()) {
+        const rawName = String(entry.entryName || '').replace(/\\/g, '/').replace(/^\uFEFF/, '');
+        if (!rawName || rawName.endsWith('/')) {
+            if (entry.isDirectory) {
+                const dirPath = path.resolve(path.join(destDir, rawName.replace(/\/$/, '')));
+                if (dirPath === canonicalDest || dirPath.startsWith(canonicalPrefix)) {
+                    fs.ensureDirSync(dirPath);
+                }
+            }
+            continue;
+        }
+        if (rawName.startsWith('/') || /^[A-Za-z]:\//.test(rawName)) {
+            skipped++;
+            continue;
+        }
+        const destPath = path.resolve(path.join(destDir, rawName));
+        if (destPath !== canonicalDest && !destPath.startsWith(canonicalPrefix)) {
+            log(`Zip blocked (path escapes extract dir): ${rawName}`);
+            skipped++;
+            continue;
+        }
+        if (entry.isDirectory) {
+            fs.ensureDirSync(destPath);
+            continue;
+        }
+        fs.ensureDirSync(path.dirname(destPath));
+        fs.writeFileSync(destPath, entry.getData());
+    }
+    if (skipped > 0) {
+        log(`extractAdmZipSafe: skipped ${skipped} unsafe path(s) in ${path.basename(zipPath)}`);
+    }
+}
 
 // MUST BE FIRST: CORS for local + deployed frontend
 app.use(cors({
@@ -49,7 +96,7 @@ app.use(cors({
 app.options(/.*/, cors());
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-    log(`Server running on http://localhost:${PORT}`);
+    log(`Server running on http://localhost:${PORT} (max ${MAX_UPLOAD_MB}MB per uploaded file)`);
 });
 
 // Increase timeout to 2 hours
@@ -72,7 +119,40 @@ const TEMP_DIR = path.join(__dirname, 'temp');
 fs.ensureDirSync(UPLOADS_DIR);
 fs.ensureDirSync(TEMP_DIR);
 
-const upload = multer({ dest: UPLOADS_DIR });
+const upload = multer({
+    dest: UPLOADS_DIR,
+    limits: {
+        fileSize: MAX_UPLOAD_MB * 1024 * 1024,
+        files: 20,
+        fields: 24,
+    },
+});
+
+function compareUpload(req, res, next) {
+    upload.fields([
+        { name: 'solution', maxCount: 1 },
+        { name: 'student', maxCount: 15 },
+        { name: 'studentExcel', maxCount: 1 },
+    ])(req, res, (err) => {
+        if (err) {
+            log(`Multipart upload error: ${err.code || 'ERR'} ${err.message}`);
+            if (!res.headersSent) {
+                if (err.code === 'LIMIT_FILE_SIZE') {
+                    return res.status(400).json({
+                        error: `A file exceeded the server limit of ${MAX_UPLOAD_MB} MB per file. Compress ZIPs, split the batch, or set MAX_UPLOAD_MB in backend/.env (then restart PM2).`,
+                    });
+                }
+                if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') {
+                    return res.status(400).json({
+                        error: 'Too many files in this request. Use at most one solution, one Excel, and up to 10 student ZIPs per run.',
+                    });
+                }
+                return res.status(400).json({ error: err.message || 'Upload failed' });
+            }
+        }
+        next();
+    });
+}
 
 
 // Helper: Kill Process Safely
@@ -326,6 +406,9 @@ function getRemarks(score, status, errorMsg) {
 
 // Helper: Find project root (contains package.json or index.html)
 async function findProjectRoot(baseDir, depth = 0) {
+    if (typeof baseDir !== 'string' || !baseDir.length) {
+        throw new Error(`findProjectRoot: baseDir must be a non-empty string, got ${typeof baseDir}`);
+    }
     if (depth > 5) return null; // Prevent infinite depth
 
     // Check current level
@@ -349,6 +432,30 @@ async function findProjectRoot(baseDir, depth = 0) {
         throw new Error(`No project root (package.json or index.html) found in ${baseDir}`);
     }
     return null;
+}
+
+/**
+ * Ensures we always pass { path: string, type } into startServer / path.basename.
+ * Guards against accidental double-wrapping or legacy callers passing a bare object.
+ */
+function asProjectInfo(root) {
+    if (typeof root === 'string') {
+        return { path: root, type: 'react' };
+    }
+    if (!root || typeof root !== 'object') {
+        throw new Error(`Invalid project root: expected string or { path, type }, got ${typeof root}`);
+    }
+    let dir = root.path;
+    const type = root.type || 'react';
+    if (dir && typeof dir === 'object' && typeof dir.path === 'string') {
+        dir = dir.path;
+    }
+    if (typeof dir !== 'string' || !dir.length) {
+        throw new Error(
+            `Invalid project root.path (must be a non-empty string). Got: ${typeof dir === 'object' ? JSON.stringify(dir).slice(0, 120) : String(dir)}`
+        );
+    }
+    return { path: dir, type };
 }
 
 
@@ -380,7 +487,7 @@ function npmScriptNeedsPortFlag(scriptCmd, cmdName) {
 
 // Helper: Run server (React/Static)
 function startServer(projectInfo, port) {
-    const { path: projectDir, type } = projectInfo;
+    const { path: projectDir, type } = asProjectInfo(projectInfo);
 
     return new Promise((resolve, reject) => {
         try {
@@ -569,6 +676,8 @@ function startServer(projectInfo, port) {
                 let finalBasePath = basePath;
 
                 // Browser-related envs to prevent opening browser windows
+                const scriptBody = (scripts[cmd] || '').toLowerCase();
+                // CRA/webpack dev server is memory-heavy; reduce RAM + optional Node heap cap (see WEBPACK_DEV_HEAP_MB)
                 const env = {
                     ...process.env,
                     PORT: port.toString(),
@@ -577,8 +686,18 @@ function startServer(projectInfo, port) {
                     CI: 'true',
                     WDS_SOCKET_PORT: port.toString(),
                     SKIP_PREFLIGHT_CHECK: 'true',
-                    NODE_OPTIONS: '--openssl-legacy-provider'
+                    GENERATE_SOURCEMAP: 'false',
+                    DISABLE_ESLINT_PLUGIN: 'true',
+                    INLINE_RUNTIME_CHUNK: 'false',
+                    NODE_OPTIONS: '--openssl-legacy-provider',
                 };
+                if (/react-scripts|craco|react-app-rewired/.test(scriptBody)) {
+                    const heapMb = Math.max(
+                        512,
+                        parseInt(process.env.WEBPACK_DEV_HEAP_MB || '1024', 10) || 1024
+                    );
+                    env.NODE_OPTIONS = `--openssl-legacy-provider --max-old-space-size=${heapMb}`;
+                }
 
                 const args = ['run', cmd];
                 if (npmScriptNeedsPortFlag(scripts[cmd], cmd)) {
@@ -801,7 +920,7 @@ function compareImages(img1Path, img2Path, diffOutputPath) {
 // Serve static files from temp to show screenshots
 app.use('/temp', express.static(TEMP_DIR));
 
-app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, { name: 'studentExcel' }]), async (req, res) => {
+app.post('/compare', compareUpload, async (req, res) => {
     const solutionFile = req.files['solution']?.[0];
     const studentFiles = req.files['student'] || [];
     const studentExcel = req.files['studentExcel']?.[0];
@@ -809,6 +928,14 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
     if (!solutionFile || (studentFiles.length === 0 && !studentExcel)) {
         return res.status(400).json({ error: 'Both solution and either student ZIP files or student Excel sheet are required.' });
     }
+
+    const uploadBytes = (f) => (f && typeof f.size === 'number' ? f.size : 0);
+    const kb = (n) => `${Math.round(n / 1024)}KB`;
+    log(
+        `POST /compare: limit ${MAX_UPLOAD_MB}MB/file | solution ${kb(uploadBytes(solutionFile))} | ` +
+            `${studentFiles.length} student ZIP(s): ${studentFiles.map((f) => `${f.originalname || 'file'}(${kb(uploadBytes(f))})`).join(', ')}` +
+            (studentExcel ? ` | excel ${kb(uploadBytes(studentExcel))}` : '')
+    );
 
     // Set up streaming response (chunked NDJSON; avoid proxy buffering where possible)
     res.setHeader('Content-Type', 'application/x-ndjson');
@@ -839,9 +966,9 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
         // 1. Prepare Solution (Once)
         sendProgress({ type: 'status', message: 'Extracting Solution ZIP...' });
         await fs.ensureDir(solExtractDir);
-        new AdmZip(solutionFile.path).extractAllTo(solExtractDir, true);
+        extractAdmZipSafe(solutionFile.path, solExtractDir);
 
-        const solRoot = await findProjectRoot(solExtractDir);
+        const solRoot = asProjectInfo(await findProjectRoot(solExtractDir));
         const solPort = 14000 + Math.floor(Math.random() * 500);
         sendProgress({ type: 'status', message: 'Starting Solution Server...' });
         solServer = await startServer(solRoot, solPort); // Assign to solServer
@@ -890,6 +1017,12 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
             killProcess(solServer.process);
             solServer = null;
         }
+
+        // Isolate reference screenshots so a malicious student zip cannot overwrite ../solution via zip-slip
+        const solScreenshotReadDir = path.join(runDir, '_reference_solution', 'screenshots');
+        await fs.ensureDir(solScreenshotReadDir);
+        await fs.copy(solScreenshotDir, solScreenshotReadDir, { overwrite: true });
+        log(`Reference screenshots copied to ${solScreenshotReadDir}`);
 
         // 2. Prepare Student Task List
         const studentTasks = [];
@@ -1005,7 +1138,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                         });
                     }
 
-                    new AdmZip(zipPath).extractAllTo(stuExtractDir, true);
+                    extractAdmZipSafe(zipPath, stuExtractDir);
                     tUnzip = performance.now() - tUnzipStart;
 
                     try {
@@ -1028,14 +1161,14 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                     }
 
                     const t0 = performance.now();
-                    const stuRoot = await findProjectRoot(stuExtractDir);
+                    const stuProjectRoot = asProjectInfo(await findProjectRoot(stuExtractDir));
                     sendProgress({
                         type: 'pipeline',
                         projectIndex: projectNum,
                         projectTotal,
                         studentName: task.name,
                         phase: 'workspace',
-                        message: `Project root: ${path.basename(stuRoot)}`
+                        message: `Project root: ${path.basename(stuProjectRoot.path)}`
                     });
                     const stuPort = 15000 + (i * 10) + (index + Math.floor(Math.random() * 100));
 
@@ -1048,7 +1181,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
                         message: 'Starting local dev server (Vite/React)…'
                     });
 
-                    stuServer = await startServer(stuRoot, stuPort); // Assign to stuServer
+                    stuServer = await startServer(stuProjectRoot, stuPort); // Assign to stuServer
                     tSetup = performance.now() - t0;
 
                     sendProgress({
@@ -1120,7 +1253,7 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
                     for (const route of routes) {
                         const fileName = route === '/' ? 'index.png' : `${route.replace(/\//g, '')}.png`;
-                        const solImg = path.join(solScreenshotDir, fileName);
+                        const solImg = path.join(solScreenshotReadDir, fileName);
                         const stuImg = path.join(stuScreenshotDir, fileName);
                         const diffImg = path.join(diffScreenshotDir, fileName);
 
