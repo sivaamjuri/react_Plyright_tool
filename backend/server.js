@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
+const fsp = require('fs/promises');
 const fs = require('fs-extra');
 const { chromium } = require('playwright');
 const pixelmatch = require('pixelmatch');
@@ -207,6 +208,10 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 server.timeout = 7200000;
 server.keepAliveTimeout = 7200000;
 server.headersTimeout = 7200000;
+// Node 18+: default requestTimeout (e.g. 5 min) can drop long-running /compare while npm/webpack runs with no writes.
+if (typeof server.requestTimeout !== 'undefined') {
+    server.requestTimeout = 0;
+}
 
 app.use(express.json());
 
@@ -603,6 +608,39 @@ function studentProjectNeedsLocalNodeModules(pkg) {
     return false;
 }
 
+async function readTextFileTail(filePath, maxLines = 28) {
+    try {
+        if (!(await fs.pathExists(filePath))) return '';
+        const st = await fs.stat(filePath);
+        if (!st.size) return '';
+        const chunk = Math.min(st.size, 98304);
+        const fh = await fsp.open(filePath, 'r');
+        try {
+            const buf = Buffer.alloc(chunk);
+            await fh.read(buf, 0, chunk, st.size - chunk, null);
+            const lines = buf.toString('utf8').replace(/\r\n/g, '\n').split('\n');
+            return lines.slice(-maxLines).join('\n').trim();
+        } finally {
+            await fh.close();
+        }
+    } catch {
+        return '';
+    }
+}
+
+function npmInstallLooksLikeNetworkError(tail) {
+    return /EAI_AGAIN|ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED|ENETUNREACH|getaddrinfo|socket hang up|fetch failed|NetworkError|npm ERR.*network|code\s*ENOTFOUND|code\s*ETIMEDOUT/i.test(
+        tail || ''
+    );
+}
+
+/** Single-line excerpt for Error.message (UI / PM2). */
+function formatNpmTailForError(tail, maxLen = 700) {
+    const t = (tail || '').replace(/\s+/g, ' ').trim();
+    if (!t) return '';
+    return t.length <= maxLen ? t : `${t.slice(0, maxLen)}…`;
+}
+
 async function npmInstallInProject(projectDir, port) {
     return enqueueNpmInstallSerialized(async () => {
         const logFile = path.join(projectDir, 'npm-install.log');
@@ -619,11 +657,31 @@ async function npmInstallInProject(projectDir, port) {
             code = await runNpmWithArgv(projectDir, logFile, argv);
         }
         if (code !== 0) {
-            let hint =
-                ' CRA/Vite projects need a real node_modules under the repo (not a symlink to master_project).';
+            let tail = await readTextFileTail(logFile, 32);
+            if (tail) {
+                log(`[${port}] npm-install.log (tail):\n${tail}`);
+            }
+            if (code === 1 && npmInstallLooksLikeNetworkError(tail)) {
+                log(`[${port}] npm install exit 1 looks network-related — retrying once in 10s...`);
+                await new Promise((r) => setTimeout(r, 10000));
+                await fs.appendFile(logFile, `\n\n--- npm install retry (network) ${new Date().toISOString()} ---\n\n`);
+                code = await runNpmWithArgv(projectDir, logFile, argv);
+                if (code === 0) return;
+                tail = await readTextFileTail(logFile, 32);
+                if (tail) log(`[${port}] npm-install.log (tail after retry):\n${tail}`);
+            }
+        }
+        if (code !== 0) {
+            const tail = await readTextFileTail(logFile, 32);
+            const excerpt = formatNpmTailForError(tail);
+            let hint = '';
             if (code === 137) {
                 hint =
                     ' Exit 137 = Linux OOM killer (out of RAM). Add swap or use a larger EC2 instance; try NPM_INSTALL_HEAP_MB=512, keep NPM_INSTALL_SERIALIZE=1 (default), and see DEPLOYMENT.md → “Adding swap (exit 137)”.';
+            } else if (code === 1) {
+                hint = ` npm exited 1 (dependency or registry error).${excerpt ? ` Last lines: ${excerpt}` : ''}`;
+            } else {
+                hint = excerpt ? ` Last lines: ${excerpt}` : '';
             }
             throw new Error(`npm install in project exited with code ${code}. See ${logFile}.${hint}`);
         }
@@ -1147,8 +1205,21 @@ app.post('/compare', compareUpload, async (req, res) => {
 
     let solServer; // Declare solServer here to be accessible in finally block
     let sharedBrowser; // Reuse one Playwright browser per compare run
+    let heartbeatInterval = null;
 
     try {
+        heartbeatInterval = setInterval(() => {
+            try {
+                if (res.writableEnded) return;
+                res.write(JSON.stringify({ type: 'heartbeat', message: 'Still processing…' }) + '\n');
+                if (typeof res.flush === 'function') {
+                    res.flush();
+                }
+            } catch {
+                /* client disconnected or socket closed */
+            }
+        }, 20000);
+
         sharedBrowser = await chromium.launch();
 
         // 1. Prepare Solution (Once)
@@ -1577,6 +1648,10 @@ app.post('/compare', compareUpload, async (req, res) => {
             res.end();
         }
     } finally {
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+        }
         // Delete the entire run directory after the request ends (success or error)
         if (runDir) {
             await fs.remove(runDir).catch(e => log(`Crucial Cleanup Error: ${e.message}`));

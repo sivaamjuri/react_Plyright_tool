@@ -73,6 +73,9 @@ const Home = () => {
         if (!line.trim()) return;
         try {
           const json = JSON.parse(line);
+          if (json.type === 'heartbeat') {
+            return;
+          }
           if (
             json.type === "status" ||
             json.type === "start" ||
