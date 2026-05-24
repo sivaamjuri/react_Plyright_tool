@@ -696,12 +696,17 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
         return res.status(400).json({ error: 'Both solution and either student ZIP files or student Excel sheet are required.' });
     }
 
-    // Set up streaming response
+    // Set up streaming response (chunked NDJSON; avoid proxy buffering where possible)
     res.setHeader('Content-Type', 'application/x-ndjson');
     res.setHeader('Transfer-Encoding', 'chunked');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
 
     const sendProgress = (data) => {
         res.write(JSON.stringify(data) + '\n');
+        if (typeof res.flush === 'function') {
+            res.flush();
+        }
     };
 
     const runId = Date.now().toString();

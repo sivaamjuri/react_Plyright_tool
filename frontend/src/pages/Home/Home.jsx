@@ -57,6 +57,18 @@ const Home = () => {
       const decoder = new TextDecoder();
       let accumulated = "";
 
+      /** Batched in one setState per chunk so every project line survives React batching */
+      let pipelineBatch = [];
+      const flushPipelineBatch = () => {
+        if (pipelineBatch.length === 0) return;
+        const batch = pipelineBatch;
+        pipelineBatch = [];
+        setProgress((prev) => ({
+          ...prev,
+          pipelineEvents: [...(prev.pipelineEvents || []), ...batch],
+        }));
+      };
+
       const handleNdjsonLine = (line) => {
         if (!line.trim()) return;
         try {
@@ -66,6 +78,7 @@ const Home = () => {
             json.type === "start" ||
             json.type === "progress"
           ) {
+            flushPipelineBatch();
             setProgress((prev) => ({
               ...prev,
               message: json.message || prev.message,
@@ -75,21 +88,16 @@ const Home = () => {
               type: json.type,
             }));
           } else if (json.type === "pipeline") {
-            setProgress((prev) => ({
-              ...prev,
-              pipelineEvents: [
-                ...(prev.pipelineEvents || []),
-                {
-                  projectIndex: json.projectIndex,
-                  projectTotal: json.projectTotal,
-                  studentName: json.studentName,
-                  phase: json.phase,
-                  message: json.message,
-                  scope: json.scope,
-                },
-              ],
-            }));
+            pipelineBatch.push({
+              projectIndex: json.projectIndex,
+              projectTotal: json.projectTotal,
+              studentName: json.studentName,
+              phase: json.phase,
+              message: json.message,
+              scope: json.scope,
+            });
           } else if (json.type === "student_complete") {
+            flushPipelineBatch();
             setProgress((prev) => ({
               ...prev,
               current: prev.current + 1,
@@ -104,8 +112,10 @@ const Home = () => {
               ],
             }));
           } else if (json.type === "result") {
+            flushPipelineBatch();
             setResults(json.data);
           } else if (json.type === "error") {
+            flushPipelineBatch();
             throw new Error(json.message);
           }
         } catch (e) {
@@ -138,6 +148,7 @@ const Home = () => {
         for (const line of lines) {
           handleNdjsonLine(line);
         }
+        flushPipelineBatch();
       }
       {
         const lines = accumulated.split("\n");
@@ -145,10 +156,12 @@ const Home = () => {
         for (const line of lines) {
           handleNdjsonLine(line);
         }
+        flushPipelineBatch();
       }
       if (accumulated.trim()) {
         handleNdjsonLine(accumulated);
       }
+      flushPipelineBatch();
     } catch (error) {
       console.error(error);
       const message =

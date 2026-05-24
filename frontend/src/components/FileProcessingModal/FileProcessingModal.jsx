@@ -67,6 +67,26 @@ function formatPipelineLine(e) {
   return `${idx} · ${short} — ${e.message || "—"}`;
 }
 
+/** Keep enough rows for reference + many projects × stages × routes */
+const MAX_TERMINAL_LINES = 800;
+
+function makeBootLines() {
+  return [
+    {
+      id: "boot-1",
+      ts: timeStamp(),
+      tag: "INIT",
+      text: "Secure session established — pipeline armed.",
+    },
+    {
+      id: "boot-2",
+      ts: timeStamp(),
+      tag: "RUNNING",
+      text: "Listening for orchestration events…",
+    },
+  ];
+}
+
 /**
  * Premium full-screen loading modal: dual-ring spinner, live terminal, gradient progress.
  */
@@ -75,7 +95,8 @@ export default function FileProcessingModal({ open, progress, statusLine }) {
   const terminalRef = useRef(null);
   const prevSigRef = useRef("");
   const completedLenRef = useRef(0);
-  const pipelineIxRef = useRef(0);
+  /** How many `progress.pipelineEvents` entries have been printed (append-only stream). */
+  const pipelineConsumedLenRef = useRef(0);
 
   const phase = progress?.message || statusLine || "Preparing workspace…";
 
@@ -95,7 +116,7 @@ export default function FileProcessingModal({ open, progress, statusLine }) {
         tag,
         text: text || "—",
       };
-      return [...prev, row].slice(-120);
+      return [...prev, row].slice(-MAX_TERMINAL_LINES);
     });
   }, []);
 
@@ -104,24 +125,11 @@ export default function FileProcessingModal({ open, progress, statusLine }) {
       setLines([]);
       prevSigRef.current = "";
       completedLenRef.current = 0;
-      pipelineIxRef.current = 0;
+      pipelineConsumedLenRef.current = 0;
       return;
     }
-    pipelineIxRef.current = 0;
-    setLines([
-      {
-        id: "boot-1",
-        ts: timeStamp(),
-        tag: "INIT",
-        text: "Secure session established — pipeline armed.",
-      },
-      {
-        id: "boot-2",
-        ts: timeStamp(),
-        tag: "RUNNING",
-        text: "Listening for orchestration events…",
-      },
-    ]);
+    pipelineConsumedLenRef.current = 0;
+    setLines(makeBootLines());
     prevSigRef.current = "";
     completedLenRef.current = progress?.completedStudents?.length ?? 0;
   }, [open]);
@@ -129,12 +137,21 @@ export default function FileProcessingModal({ open, progress, statusLine }) {
   useEffect(() => {
     if (!open) return;
     const evs = progress?.pipelineEvents;
-    if (!evs?.length) return;
-    while (pipelineIxRef.current < evs.length) {
-      const e = evs[pipelineIxRef.current];
-      pipelineIxRef.current += 1;
+    if (!evs?.length) {
+      pipelineConsumedLenRef.current = 0;
+      return;
+    }
+    // Parent reset the run (new batch) while modal stayed open — replay from scratch
+    if (evs.length < pipelineConsumedLenRef.current) {
+      pipelineConsumedLenRef.current = 0;
+      setLines(makeBootLines());
+    }
+    const start = pipelineConsumedLenRef.current;
+    for (let i = start; i < evs.length; i++) {
+      const e = evs[i];
       pushLine(formatPipelineLine(e), tagForPipelinePhase(e.phase));
     }
+    pipelineConsumedLenRef.current = evs.length;
   }, [open, progress?.pipelineEvents, pushLine]);
 
   useEffect(() => {
@@ -233,7 +250,7 @@ export default function FileProcessingModal({ open, progress, statusLine }) {
                 </div>
                 <div
                   ref={terminalRef}
-                  className="fp-terminal-cursor max-h-[240px] min-h-[200px] overflow-y-auto overscroll-contain px-3 py-3 font-[JetBrains_Mono,ui-monospace,monospace] text-[11px] leading-relaxed text-slate-300/95 sm:text-xs"
+                  className="fp-terminal-cursor max-h-[min(52vh,520px)] min-h-[220px] overflow-y-auto overscroll-contain px-3 py-3 font-[JetBrains_Mono,ui-monospace,monospace] text-[11px] leading-relaxed text-slate-300/95 sm:text-xs"
                 >
                   {lines.map((line) => (
                     <div key={line.id} className="mb-1.5 break-words">
