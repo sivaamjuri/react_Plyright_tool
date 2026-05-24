@@ -14,6 +14,7 @@ const unzipper = require('unzipper');
 const os = require('os');
 const xlsx = require('xlsx');
 const AdmZip = require('adm-zip');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3000;
