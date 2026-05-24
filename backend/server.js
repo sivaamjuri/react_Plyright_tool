@@ -352,6 +352,32 @@ async function findProjectRoot(baseDir, depth = 0) {
 }
 
 
+/** First usable script to run a local dev server (Vite/CRA/webpack/etc.) */
+function pickNpmDevScript(scripts) {
+    if (!scripts || typeof scripts !== 'object') return null;
+    const order = ['dev', 'start', 'serve', 'develop', 'start:dev'];
+    for (const name of order) {
+        const body = scripts[name];
+        if (typeof body === 'string' && body.trim()) return name;
+    }
+    return null;
+}
+
+/**
+ * Whether to append `-- --port … --host …` after `npm run <cmd>`.
+ * CRA/react-scripts should rely on PORT env only; Vite/webpack-dev-server need flags.
+ */
+function npmScriptNeedsPortFlag(scriptCmd, cmdName) {
+    const s = (scriptCmd || '').toLowerCase();
+    if (/react-scripts|craco|react-app-rewired/.test(s)) return false;
+    if (/next\s/.test(s)) return false;
+    if (/vite\s+preview|\bpreview\b/.test(s)) return false;
+    if (/vite|webpack-dev-server|parcel\s/.test(s)) return true;
+    if (cmdName === 'dev') return true;
+    return false;
+}
+
+
 // Helper: Run server (React/Static)
 function startServer(projectInfo, port) {
     const { path: projectDir, type } = projectInfo;
@@ -515,11 +541,14 @@ function startServer(projectInfo, port) {
                 const logPath = path.join(projectDir, 'dev-server.log');
                 const logStream = fs.createWriteStream(logPath, { flags: 'a' });
 
-                // Determine command
-                let cmd = 'dev';
-                if (!studentPkg.scripts?.dev && studentPkg.scripts?.start) {
-                    cmd = 'start';
+                const scripts = studentPkg.scripts || {};
+                const cmd = pickNpmDevScript(scripts);
+                if (!cmd) {
+                    throw new Error(
+                        'package.json has no dev server script. Add one of: "dev", "start", or "serve" (e.g. "dev": "vite" or "start": "react-scripts start").'
+                    );
                 }
+                log(`[${port}] Using npm run ${cmd}`);
 
                 // Determine base path from homepage if it exists
                 let basePath = '';
@@ -552,7 +581,7 @@ function startServer(projectInfo, port) {
                 };
 
                 const args = ['run', cmd];
-                if (cmd === 'dev') {
+                if (npmScriptNeedsPortFlag(scripts[cmd], cmd)) {
                     args.push('--', '--port', port.toString(), '--host', '127.0.0.1');
                 }
 
