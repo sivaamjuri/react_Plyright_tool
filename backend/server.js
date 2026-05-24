@@ -218,15 +218,17 @@ async function ensureMasterProjectNodeModules(portLabel = '') {
         log(`${tag}master_project/node_modules missing — running npm install in master_project (first run may take several minutes)...`);
         const logFile = path.join(MASTER_DIR, 'npm-install.log');
         await fs.ensureFile(logFile);
-        const out = fs.createWriteStream(logFile, { flags: 'a' });
         await new Promise((resolve) => {
             const inst = spawn(
                 'npm',
                 ['install', '--no-audit', '--no-fund', '--no-progress', '--legacy-peer-deps'],
-                { cwd: MASTER_DIR, shell: true, stdio: ['ignore', out, out] }
+                { cwd: MASTER_DIR, shell: true, stdio: ['ignore', 'pipe', 'pipe'] }
             );
+            const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+            inst.stdout?.pipe(logStream);
+            inst.stderr?.pipe(logStream);
             inst.on('close', (code) => {
-                out.end();
+                logStream.end();
                 if (code !== 0) {
                     log(`${tag}master_project npm install exited with code ${code} — see master_project/npm-install.log`);
                 } else {
@@ -236,7 +238,7 @@ async function ensureMasterProjectNodeModules(portLabel = '') {
             });
             inst.on('error', (err) => {
                 log(`${tag}master_project npm install spawn error: ${err.message}`);
-                out.end();
+                logStream.end();
                 resolve();
             });
         });
@@ -522,16 +524,18 @@ function studentProjectNeedsLocalNodeModules(pkg) {
 async function npmInstallInProject(projectDir, port) {
     const logFile = path.join(projectDir, 'npm-install.log');
     await fs.ensureFile(logFile);
-    const out = fs.createWriteStream(logFile, { flags: 'a' });
     log(`[${port}] Running npm install in project (see npm-install.log)...`);
     await new Promise((resolve, reject) => {
         const inst = spawn(
             'npm',
             ['install', '--no-audit', '--no-fund', '--no-progress', '--legacy-peer-deps'],
-            { cwd: projectDir, shell: true, stdio: ['ignore', out, out] }
+            { cwd: projectDir, shell: true, stdio: ['ignore', 'pipe', 'pipe'] }
         );
+        const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+        inst.stdout?.pipe(logStream);
+        inst.stderr?.pipe(logStream);
         inst.on('close', (code) => {
-            out.end();
+            logStream.end();
             if (code !== 0) {
                 reject(
                     new Error(
@@ -541,7 +545,7 @@ async function npmInstallInProject(projectDir, port) {
             } else resolve();
         });
         inst.on('error', (err) => {
-            out.end();
+            logStream.end();
             reject(err);
         });
     });
