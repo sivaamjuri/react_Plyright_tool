@@ -197,9 +197,10 @@ const MASTER_DIR = path.join(__dirname, 'master_project');
 const MASTER_MODULES = path.join(MASTER_DIR, 'node_modules');
 
 /**
- * Shared node_modules for uploaded Vite/CRA apps (junction target).
- * Without this install, junctions point at an empty folder and Vite fails with
- * ERR_MODULE_NOT_FOUND for @vitejs/plugin-react.
+ * Shared node_modules for uploaded Vite apps (junction from student dir → master_project/node_modules).
+ * CRA/react-scripts projects skip the junction (see studentProjectNeedsLocalNodeModules) because
+ * webpack resolves symlinked packages to real paths under master_project/, which CRA's ModuleScopePlugin rejects.
+ * Without this install, junctions point at an empty folder and Vite fails with ERR_MODULE_NOT_FOUND for @vitejs/plugin-react.
  */
 async function ensureMasterProjectNodeModules(portLabel = '') {
     const marker = path.join(MASTER_MODULES, '@vitejs', 'plugin-react', 'package.json');
@@ -501,6 +502,51 @@ function npmScriptNeedsPortFlag(scriptCmd, cmdName) {
     return false;
 }
 
+/**
+ * Create React App resolves symlinked node_modules to their real path (e.g. master_project/...).
+ * ModuleScopePlugin then rejects react-refresh and similar as "outside src/". Vite does not
+ * have this restriction, so we keep the shared master_project junction only for non-CRA flows.
+ */
+function studentProjectNeedsLocalNodeModules(pkg) {
+    if (!pkg || typeof pkg !== 'object') return false;
+    const scripts = pkg.scripts || {};
+    const scriptBodies = Object.values(scripts)
+        .filter((s) => typeof s === 'string')
+        .join(' ');
+    if (/react-scripts|craco|react-app-rewired/.test(scriptBodies)) return true;
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    if (deps['react-scripts'] || deps.craco || deps['react-app-rewired']) return true;
+    return false;
+}
+
+async function npmInstallInProject(projectDir, port) {
+    const logFile = path.join(projectDir, 'npm-install.log');
+    await fs.ensureFile(logFile);
+    const out = fs.createWriteStream(logFile, { flags: 'a' });
+    log(`[${port}] Running npm install in project (see npm-install.log)...`);
+    await new Promise((resolve, reject) => {
+        const inst = spawn(
+            'npm',
+            ['install', '--no-audit', '--no-fund', '--no-progress', '--legacy-peer-deps'],
+            { cwd: projectDir, shell: true, stdio: ['ignore', out, out] }
+        );
+        inst.on('close', (code) => {
+            out.end();
+            if (code !== 0) {
+                reject(
+                    new Error(
+                        `npm install in project exited with code ${code}. See ${logFile} (CRA/Vite projects need a real node_modules under the repo, not a symlink to master_project).`
+                    )
+                );
+            } else resolve();
+        });
+        inst.on('error', (err) => {
+            out.end();
+            reject(err);
+        });
+    });
+}
+
 
 // Helper: Run server (React/Static)
 function startServer(projectInfo, port) {
@@ -526,14 +572,11 @@ function startServer(projectInfo, port) {
                 return;
             }
 
-            // React/Vite/CRA logic
+            // React/Vite/CRA logic (masterDir used for shared node_modules + learning installs)
             const masterDir = path.join(__dirname, 'master_project');
-            const masterModules = path.join(masterDir, 'node_modules');
-            const targetModules = path.join(projectDir, 'node_modules');
 
             // Read package.json to find the right script and identify missing deps
             let studentPkg = {};
-            let masterPkg = {};
             try {
                 studentPkg = fs.readJsonSync(path.join(projectDir, 'package.json'));
             } catch (e) {
@@ -557,80 +600,95 @@ function startServer(projectInfo, port) {
                     );
                 }
 
-                // Determine missing dependencies or version mismatches
-                const studentDeps = { ...(studentPkg.dependencies || {}), ...(studentPkg.devDependencies || {}) };
-                const masterDir = path.join(__dirname, 'master_project');
-                const masterPkg = fs.readJsonSync(path.join(masterDir, 'package.json'));
-                const masterDeps = { ...(masterPkg.dependencies || {}), ...(masterPkg.devDependencies || {}) };
+                const useLocalNodeModules =
+                    /^(1|true|yes)$/i.test(String(process.env.DISABLE_SHARED_NODE_MODULES || '')) ||
+                    studentProjectNeedsLocalNodeModules(studentPkg);
 
-                const stillMissing = [];
-                for (const [dep, ver] of Object.entries(studentDeps)) {
-                    const masterVer = masterDeps[dep];
-                    const cleanVer = ver.replace(/[\^~]/g, '');
-
-                    if (!masterVer) {
-                        stillMissing.push(`${dep}@${cleanVer}`);
-                        continue;
-                    }
-
-                    // Check for major version mismatch (e.g., v5 vs v6)
-                    const sMajor = cleanVer.split('.')[0];
-                    const mMajor = masterVer.replace(/[\^~]/g, '').split('.')[0];
-
-                    if (sMajor !== mMajor && !isNaN(parseInt(sMajor)) && !isNaN(parseInt(mMajor))) {
-                        log(`[${port}] Major version mismatch for ${dep}: Master (${mMajor}) vs Student (${sMajor}). Upgrading...`);
-                        stillMissing.push(`${dep}@${cleanVer}`);
-                    }
-                }
-
-                if (stillMissing.length > 0) {
-                    // Wait if another process is learning
-                    while (global.isLearning) {
-                        await new Promise(r => setTimeout(r, 1000));
-                    }
-
-                    global.isLearning = true;
-                    log(`[${port}] Learning/Upgrading dependencies: ${stillMissing.join(', ')}...`);
-                    try {
-                        const installResult = await new Promise((res) => {
-                            const inst = spawn('npm', ['install', '--save', ...stillMissing, '--no-audit', '--no-fund', '--no-progress', '--legacy-peer-deps'], {
-                                cwd: masterDir,
-                                shell: true
-                            });
-
-                            let errOutput = '';
-                            inst.stderr?.on('data', (data) => errOutput += data.toString());
-
-                            inst.on('close', (code) => {
-                                if (code !== 0) log(`[${port}] npm install warning/error: ${errOutput}`);
-                                res(code);
-                            });
-                        });
-                        log(`[${port}] Update complete. Result code: ${installResult}`);
-                    } catch (e) {
-                        log(`[${port}] Update failed: ${e.message}`);
-                    } finally {
-                        global.isLearning = false;
-                    }
-                }
-
-                log(`[${port}] Using shared node_modules for speed...`);
-                try {
-                    const masterModules = path.join(masterDir, 'node_modules');
+                if (useLocalNodeModules) {
+                    log(
+                        `[${port}] Using project-local node_modules (CRA/react-scripts cannot use a symlink to master_project — ModuleScope blocks paths outside src/).`
+                    );
                     const targetModules = path.join(projectDir, 'node_modules');
-
-                    // If node_modules exists and is NOT a junction/symlink, remove it
                     if (await fs.pathExists(targetModules)) {
-                        const lstat = await fs.lstat(targetModules);
-                        if (!lstat.isSymbolicLink()) {
-                            log(`[${port}] Removing existing student node_modules...`);
-                            await fs.remove(targetModules);
+                        log(`[${port}] Removing existing node_modules for local install...`);
+                        await fs.remove(targetModules);
+                    }
+                    await npmInstallInProject(projectDir, port);
+                } else {
+                    // Determine missing dependencies or version mismatches
+                    const studentDeps = { ...(studentPkg.dependencies || {}), ...(studentPkg.devDependencies || {}) };
+                    const masterPkg = fs.readJsonSync(path.join(masterDir, 'package.json'));
+                    const masterDeps = { ...(masterPkg.dependencies || {}), ...(masterPkg.devDependencies || {}) };
+
+                    const stillMissing = [];
+                    for (const [dep, ver] of Object.entries(studentDeps)) {
+                        const masterVer = masterDeps[dep];
+                        const cleanVer = ver.replace(/[\^~]/g, '');
+
+                        if (!masterVer) {
+                            stillMissing.push(`${dep}@${cleanVer}`);
+                            continue;
+                        }
+
+                        // Check for major version mismatch (e.g., v5 vs v6)
+                        const sMajor = cleanVer.split('.')[0];
+                        const mMajor = masterVer.replace(/[\^~]/g, '').split('.')[0];
+
+                        if (sMajor !== mMajor && !isNaN(parseInt(sMajor)) && !isNaN(parseInt(mMajor))) {
+                            log(`[${port}] Major version mismatch for ${dep}: Master (${mMajor}) vs Student (${sMajor}). Upgrading...`);
+                            stillMissing.push(`${dep}@${cleanVer}`);
                         }
                     }
 
-                    await fs.ensureSymlink(masterModules, targetModules, 'junction');
-                } catch (e) {
-                    log(`[${port}] Symlink failed: ${e.message}`);
+                    if (stillMissing.length > 0) {
+                        // Wait if another process is learning
+                        while (global.isLearning) {
+                            await new Promise(r => setTimeout(r, 1000));
+                        }
+
+                        global.isLearning = true;
+                        log(`[${port}] Learning/Upgrading dependencies: ${stillMissing.join(', ')}...`);
+                        try {
+                            const installResult = await new Promise((res) => {
+                                const inst = spawn('npm', ['install', '--save', ...stillMissing, '--no-audit', '--no-fund', '--no-progress', '--legacy-peer-deps'], {
+                                    cwd: masterDir,
+                                    shell: true
+                                });
+
+                                let errOutput = '';
+                                inst.stderr?.on('data', (data) => errOutput += data.toString());
+
+                                inst.on('close', (code) => {
+                                    if (code !== 0) log(`[${port}] npm install warning/error: ${errOutput}`);
+                                    res(code);
+                                });
+                            });
+                            log(`[${port}] Update complete. Result code: ${installResult}`);
+                        } catch (e) {
+                            log(`[${port}] Update failed: ${e.message}`);
+                        } finally {
+                            global.isLearning = false;
+                        }
+                    }
+
+                    log(`[${port}] Using shared node_modules for speed...`);
+                    try {
+                        const masterModules = path.join(masterDir, 'node_modules');
+                        const targetModules = path.join(projectDir, 'node_modules');
+
+                        // If node_modules exists and is NOT a junction/symlink, remove it
+                        if (await fs.pathExists(targetModules)) {
+                            const lstat = await fs.lstat(targetModules);
+                            if (!lstat.isSymbolicLink()) {
+                                log(`[${port}] Removing existing student node_modules...`);
+                                await fs.remove(targetModules);
+                            }
+                        }
+
+                        await fs.ensureSymlink(masterModules, targetModules, 'junction');
+                    } catch (e) {
+                        log(`[${port}] Symlink failed: ${e.message}`);
+                    }
                 }
 
                 // NEW: Start json-server if db.json or server.js exists

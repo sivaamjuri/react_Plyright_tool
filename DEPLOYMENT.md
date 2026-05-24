@@ -276,7 +276,7 @@ pm2 restart ui-similarity-api
 |------|------|
 | `/opt/ui-similarity/backend/server.js` | API entry |
 | `/opt/ui-similarity/backend/.env` | `PORT`, `CORS_ORIGINS` |
-| `/opt/ui-similarity/backend/master_project/node_modules` | Shared deps for uploaded Vite projects |
+| `/opt/ui-similarity/backend/master_project/node_modules` | Shared deps for **Vite** uploads (junction). **CRA** uploads run `npm install` in each temp project instead (symlink breaks `react-scripts`). |
 | `/opt/ui-similarity/backend/temp/` | Extracted uploads (transient) |
 
 ---
@@ -488,6 +488,8 @@ Restart `npm run dev` after changing `.env`.
 | Browser: “Failed to fetch” / CORS error | `CORS_ORIGINS` includes the **exact** Vercel origin; restart PM2. |
 | Vercel site loads but compare fails | `VITE_API_URL` correct; EC2 security group allows your IP (or 0.0.0.0 for 3000); API reachable from internet. |
 | `ERR_MODULE_NOT_FOUND` / Vite on uploads | On the server, `master_project/node_modules` exists — run `cd backend/master_project && npm install`. |
+| CRA: “outside of the project src/” / paths under `master_project/node_modules/react-refresh` | Deploy latest `server.js`: CRA no longer uses the shared junction; each CRA ZIP runs a local `npm install` (slower, more disk). |
+| “exited too early” right after `Starting the development server` | Often a **compile error** (see `temp/.../student_*/dev-server.log`) or **OOM** — raise RAM or `WEBPACK_DEV_HEAP_MB`. |
 
 ---
 
