@@ -359,7 +359,7 @@ proxy_connect_timeout 75s;
 
 3. **CORS** — if the browser console shows a CORS error, add your **exact** Vercel origin (including `https://`) to **`CORS_ORIGINS`** on the server and restart PM2.
 
-4. **RAM / disk on a small EC2** — eight heavy React installs in one run can OOM or fill disk; watch **`pm2 logs ui-similarity-api`** and **`df -h`**. Create React App (`react-scripts start`) is especially memory-hungry; prefer **t3.small** or larger, or set **`WEBPACK_DEV_HEAP_MB`** in `backend/.env` (see `.env.example`) and restart PM2.
+4. **RAM / disk on a small EC2** — eight heavy React installs in one run can OOM or fill disk; watch **`pm2 logs ui-similarity-api`** and **`df -h`**. Create React App (`react-scripts start`) is especially memory-hungry; prefer **t3.small** or larger, or set **`WEBPACK_DEV_HEAP_MB`** in `backend/.env` (see `.env.example`) and restart PM2. **Second and later projects** can look “stuck” while webpack compiles: the API waits up to **`SERVER_READY_MAX_WAIT_SEC`** (default 720s) with **`SERVER_READY_TIMEOUT_MS`** (default 25s) per probe — tune in `.env` if needed.
 
 5. **Zip-slip** — older server builds could allow a crafted student `.zip` to overwrite reference files under the same run directory. Current code uses **safe extraction** and a **copy of reference screenshots** in `_reference_solution/` so comparisons stay consistent.
 

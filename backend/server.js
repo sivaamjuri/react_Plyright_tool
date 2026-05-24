@@ -25,6 +25,23 @@ const MAX_UPLOAD_MB = Math.min(
     Math.max(32, Number.parseInt(process.env.MAX_UPLOAD_MB || '500', 10) || 500)
 );
 
+/** Axios timeout for each GET probe to the student dev server (CRA first compile is slow). */
+const SERVER_READY_TIMEOUT_MS = Math.min(
+    120000,
+    Math.max(5000, Number.parseInt(process.env.SERVER_READY_TIMEOUT_MS || '25000', 10) || 25000)
+);
+/** Max seconds to poll before failing (720s default ≈ 12 min for small EC2 + react-scripts). */
+const SERVER_READY_MAX_WAIT_SEC = Math.min(
+    1200,
+    Math.max(120, Number.parseInt(process.env.SERVER_READY_MAX_WAIT_SEC || '720', 10) || 720)
+);
+
+/** Playwright page.goto timeout (heavy Vite/CRA apps can exceed 30s on first load). */
+const PLAYWRIGHT_GOTO_TIMEOUT_MS = Math.min(
+    300000,
+    Math.max(15000, Number.parseInt(process.env.PLAYWRIGHT_GOTO_TIMEOUT_MS || '90000', 10) || 90000)
+);
+
 const parseAllowedOrigins = () => {
     const raw = process.env.CORS_ORIGINS;
     if (!raw) return ['http://localhost:5173'];
@@ -96,7 +113,7 @@ app.use(cors({
 app.options(/.*/, cors());
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-    log(`Server running on http://localhost:${PORT} (max ${MAX_UPLOAD_MB}MB per uploaded file)`);
+    log(`Server running on http://localhost:${PORT} (max ${MAX_UPLOAD_MB}MB/file; dev probe ${SERVER_READY_TIMEOUT_MS}ms / ${SERVER_READY_MAX_WAIT_SEC}s; Playwright goto ${PLAYWRIGHT_GOTO_TIMEOUT_MS}ms)`);
 });
 
 // Increase timeout to 2 hours
@@ -734,7 +751,7 @@ function startServer(projectInfo, port) {
 
 function checkServerReady(port, basePath, serverProcess, resolve, reject, logPath) {
     let attempts = 0;
-    const maxAttempts = 180; // 3 minutes
+    const maxAttempts = SERVER_READY_MAX_WAIT_SEC;
 
     const check = async () => {
         // Check if the process has exited
@@ -755,20 +772,30 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
         }
 
         if (attempts >= maxAttempts) {
-            log(`[${port}] Server startup timed out after ${maxAttempts}s`);
-            return reject(new Error(`Timeout waiting for server on port ${port}. Check dev-server.log for details.`));
+            log(`[${port}] Server startup timed out after ${maxAttempts}s (raise SERVER_READY_MAX_WAIT_SEC / SERVER_READY_TIMEOUT_MS or use a larger EC2)`);
+            return reject(new Error(`Timeout waiting for server on port ${port} after ${maxAttempts}s. CRA/webpack may still be compiling — see dev-server.log in the project folder, or increase SERVER_READY_MAX_WAIT_SEC in backend/.env.`));
         }
         attempts++;
 
         if (attempts % 10 === 0) {
-            log(`[${port}] Still waiting for server... (${attempts}s)`);
+            log(`[${port}] Still waiting for server... (${attempts}s / ${maxAttempts}s)`);
+        }
+
+        if (attempts % 60 === 0 && attempts > 0 && logPath && await fs.pathExists(logPath)) {
+            try {
+                const content = await fs.readFile(logPath, 'utf8');
+                const tail = content.split('\n').filter(Boolean).slice(-10).join('\n');
+                if (tail) log(`[${port}] dev-server.log (last lines):\n${tail}`);
+            } catch {
+                /* ignore */
+            }
         }
 
         try {
             const url = `http://127.0.0.1:${port}${basePath}`;
             // Use axios for better control over timeouts and errors, bypassing any proxies
             await axios.get(url, {
-                timeout: 2000,
+                timeout: SERVER_READY_TIMEOUT_MS,
                 headers: { 'Accept': 'text/html', 'ngrok-skip-browser-warning': 'true' },
                 validateStatus: (status) => status >= 200 && status < 500,
                 proxy: false // Avoid proxy issues on local connections
@@ -780,7 +807,12 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
             if (attempts === 5) {
                 try {
                     const localUrl = `http://localhost:${port}${basePath}`;
-                    await axios.get(localUrl, { timeout: 1000, proxy: false, headers: { 'ngrok-skip-browser-warning': 'true' } });
+                    await axios.get(localUrl, {
+                        timeout: SERVER_READY_TIMEOUT_MS,
+                        proxy: false,
+                        headers: { 'Accept': 'text/html', 'ngrok-skip-browser-warning': 'true' },
+                        validateStatus: (status) => status >= 200 && status < 500,
+                    });
                     log(`[${port}] Server ready at ${localUrl}`);
                     return resolve({ process: serverProcess, baseUrl: `http://127.0.0.1:${port}${basePath}` });
                 } catch (err) { }
@@ -816,7 +848,7 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
             }
             log(`Navigating to ${url}...`);
             await page.setViewportSize({ width: 1280, height: 800 });
-            await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+            await page.goto(url, { waitUntil: 'load', timeout: PLAYWRIGHT_GOTO_TIMEOUT_MS });
 
             // Inject CSS to disable animations/transitions
             await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; caret-color: transparent !important; }' });
