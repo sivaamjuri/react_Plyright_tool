@@ -34,10 +34,11 @@ const Home = () => {
     studentFiles.forEach((file) => formData.append("student", file));
     if (excelFile) formData.append("studentExcel", excelFile);
 
+    const baseUrl = (
+      import.meta.env.VITE_API_URL || "http://localhost:3000"
+    ).replace(/\/$/, "");
+
     try {
-      const baseUrl = (
-        import.meta.env.VITE_API_URL || "http://localhost:3000"
-      ).replace(/\/$/, "");
       const isNgrok =
         baseUrl.includes("ngrok-free.dev") || baseUrl.includes("ngrok.io");
       console.log("API URL:", import.meta.env.VITE_API_URL);
@@ -167,10 +168,23 @@ const Home = () => {
       flushPipelineBatch();
     } catch (error) {
       console.error(error);
-      const message =
-        error?.message === "Failed to fetch"
-          ? "Cannot reach backend. Make sure API is running and VITE_API_URL points to a valid URL."
-          : error.message;
+      const failedFetch =
+        error?.message === "Failed to fetch" ||
+        (error?.name === "TypeError" &&
+          /fetch|network|load failed/i.test(String(error?.message || "")));
+      const pageOrigin =
+        typeof window !== "undefined" ? window.location.origin : "your-site";
+      const pageIsHttps =
+        typeof window !== "undefined" && window.location.protocol === "https:";
+      const apiIsHttp = baseUrl.startsWith("http:");
+      const mixed = pageIsHttps && apiIsHttp;
+      const message = failedFetch
+        ? `Cannot reach backend at ${baseUrl}/compare.${
+            mixed
+              ? " BROWSER BLOCKS MIXED CONTENT: this page is HTTPS but VITE_API_URL is HTTP. Put HTTPS in front of the API (Nginx + Let’s Encrypt) and set VITE_API_URL to https://…, then redeploy the frontend."
+              : ""
+          } Otherwise check: CORS_ORIGINS on the server includes ${pageOrigin}; EC2 security group allows TCP 3000; pm2 is online.`
+        : error.message;
       alert(`Error: ${message}`);
     } finally {
       setIsLoading(false);

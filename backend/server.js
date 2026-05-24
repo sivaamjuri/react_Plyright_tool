@@ -221,6 +221,12 @@ app.use((req, res, next) => {
     next();
 });
 
+/** Liveness for curl / browser checks (GET / returns 404 from Express default). */
+app.get('/health', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, uptimeSec: Math.round(process.uptime()) });
+});
+
 // Setup directories
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const TEMP_DIR = path.join(__dirname, 'temp');
