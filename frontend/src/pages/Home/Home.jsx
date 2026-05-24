@@ -3,6 +3,8 @@ import UploadForm from "../../components/UploadForm/UploadForm";
 import Results from "../../components/Results/Results";
 import "./Home.css";
 
+const MAX_STUDENT_PROJECTS = 10;
+
 const Home = () => {
   const [results, setResults] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -142,31 +144,84 @@ const Home = () => {
   };
 
   return (
-    <div className="home-container">
-      <header className="hero">
-        <h1>Visual UI Checker</h1>
-        <p>
-          Compare student submissions against the solution with pixel-perfect
-          accuracy.
-        </p>
-      </header>
+    <div
+      className={`home-container${!results ? " home-container--landing" : ""}`}
+    >
+      <div className="home-container__glow" aria-hidden />
 
-      <main className="main-content">
-        {!results ? (
-          <UploadForm
-            onAnalyze={handleAnalyze}
-            isLoading={isLoading}
-            progress={progress}
-          />
-        ) : (
-          <div className="results-wrapper">
-            <Results data={results} />
-            <button className="reset-btn" onClick={() => setResults(null)}>
-              Upload New Project
-            </button>
+      {!results ? (
+        <div className="landing-layout">
+          <div className="landing-heading-band">
+            <h1 className="hero__title hero__title--landing-band">
+              <span className="hero__title-line">
+                <span className="hero__title-accent">R</span>eact{" "}
+                <span className="hero__title-accent">U</span>I{" "}
+                <span className="hero__title-accent">V</span>alidator
+              </span>
+            </h1>
           </div>
-        )}
-      </main>
+
+          <div className="landing-layout__intro">
+            <header className="hero hero--landing-split">
+              <p className="hero__eyebrow">Enterprise visual QA for React</p>
+              <p className="hero__subtitle">
+                Automated pixel-perfect validation and visual accuracy scoring for
+                React applications.
+              </p>
+              <p className="hero__supporting">
+                Compare reference and candidate builds with screenshot alignment,
+                pixel-level UI diffing, and scored accuracy — built for review
+                workflows and teaching at scale.
+              </p>
+            </header>
+
+            <div className="hero-notice" role="note">
+              <span className="hero-notice__mark" aria-hidden>
+                i
+              </span>
+              <div className="hero-notice__body">
+                <span className="hero-notice__label">Operational note</span>
+                <p className="hero-notice__text">
+                  This workspace processes{" "}
+                  <strong>up to {MAX_STUDENT_PROJECTS} student projects</strong>{" "}
+                  per batch. Split larger cohorts into multiple runs to keep
+                  validation fast, stable, and within platform limits.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="landing-layout__panel">
+            <main className="main-content main-content--landing">
+              <UploadForm
+                onAnalyze={handleAnalyze}
+                isLoading={isLoading}
+                progress={progress}
+                maxStudentProjects={MAX_STUDENT_PROJECTS}
+              />
+            </main>
+          </div>
+        </div>
+      ) : (
+        <>
+          <header className="hero hero--compact">
+            <h1 className="hero__title hero__title--compact">
+              <span className="hero__title-accent">R</span>eact{" "}
+              <span className="hero__title-accent">U</span>I{" "}
+              <span className="hero__title-accent">V</span>alidator
+            </h1>
+          </header>
+
+          <main className="main-content">
+            <div className="results-wrapper">
+              <Results data={results} />
+              <button className="reset-btn" onClick={() => setResults(null)}>
+                Upload New Project
+              </button>
+            </div>
+          </main>
+        </>
+      )}
     </div>
   );
 };

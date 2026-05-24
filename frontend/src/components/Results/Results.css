@@ -10,6 +10,10 @@
     align-items: flex-start;
 }
 
+.results-container .glass-panel {
+    max-width: none;
+}
+
 @keyframes fadeIn {
     from {
         opacity: 0;
@@ -33,20 +37,32 @@
     padding: 1.5rem;
 }
 
+.batch-summary h2 {
+    margin: 0 0 1.25rem;
+    text-align: center;
+    color: var(--text-primary);
+    font-size: 1.1rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
 .detail-view {
     flex: 0 0 calc(70% - 2rem);
-    /* Exactly 70% minus the gap */
     max-width: calc(70% - 2rem);
-    padding: 2rem;
+    padding: 2.5rem;
+    background: rgba(15, 16, 33, 0.35);
+    border: 1px solid var(--glass-border);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
 }
 
 .download-excel-btn {
     width: 100%;
     margin: 1.5rem 0;
     padding: 1rem;
-    background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+    background: linear-gradient(135deg, #0d9488 0%, #22c55e 55%, #14b8a6 100%);
     color: white;
-    border: none;
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 12px;
     font-weight: 600;
     cursor: pointer;
@@ -55,13 +71,17 @@
     justify-content: center;
     gap: 10px;
     transition: all 0.3s;
-    box-shadow: 0 4px 12px rgba(22, 163, 74, 0.2);
+    box-shadow:
+        0 4px 16px rgba(20, 184, 166, 0.25),
+        inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
 .download-excel-btn:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(22, 163, 74, 0.3);
-    filter: brightness(1.1);
+    box-shadow:
+        0 8px 28px rgba(34, 211, 238, 0.2),
+        0 6px 20px rgba(22, 163, 74, 0.25);
+    filter: brightness(1.08);
 }
 
 .download-excel-btn .icon {
@@ -77,11 +97,12 @@
 }
 
 .stat-card {
-    background: rgba(255, 255, 255, 0.05);
+    background: rgba(15, 16, 33, 0.5);
     padding: 1rem;
     border-radius: 12px;
     display: flex;
     flex-direction: column;
+    border: 1px solid var(--glass-border);
 }
 
 .stat-card .label {
@@ -107,8 +128,8 @@
 
 .project-tab {
     padding: 1rem;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(15, 16, 33, 0.45);
+    border: 1px solid var(--glass-border);
     border-radius: 10px;
     cursor: pointer;
     display: flex;
@@ -118,12 +139,14 @@
 }
 
 .project-tab:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(34, 211, 238, 0.08);
+    border-color: rgba(34, 211, 238, 0.2);
 }
 
 .project-tab.active {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
+    background: linear-gradient(135deg, rgba(8, 145, 178, 0.35), rgba(34, 211, 238, 0.22));
+    border-color: rgba(34, 211, 238, 0.55);
+    box-shadow: 0 0 20px rgba(34, 211, 238, 0.12);
 }
 
 .project-tab.active span {
@@ -143,14 +166,20 @@
     max-width: 180px;
 }
 
-/* Detail View Layout */
-.detail-view {
-    flex: 1;
-    padding: 2.5rem;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+.p-score {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--accent-primary);
+    font-variant-numeric: tabular-nums;
 }
 
+.p-error {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #fca5a5;
+}
+
+/* Detail View Layout */
 .project-header {
     display: flex;
     justify-content: space-between;
@@ -161,8 +190,9 @@
 .badge {
     display: inline-block;
     padding: 0.25rem 0.75rem;
-    background: rgba(100, 100, 255, 0.1);
+    background: rgba(34, 211, 238, 0.12);
     color: var(--accent-primary);
+    border: 1px solid rgba(34, 211, 238, 0.25);
     border-radius: 20px;
     font-size: 0.75rem;
     font-weight: 600;
@@ -174,7 +204,7 @@
 .header-text h3 {
     font-size: 2rem;
     margin: 0;
-    background: linear-gradient(135deg, #fff 0%, #aaa 100%);
+    background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 45%, #22d3ee 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -236,16 +266,17 @@
 }
 
 .comparison-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    background: rgba(15, 16, 33, 0.45);
+    border: 1px solid var(--glass-border);
     border-radius: 20px;
     padding: 1.5rem;
-    transition: transform 0.3s ease;
+    transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 .comparison-card:hover {
     transform: translateY(-5px);
-    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(34, 211, 238, 0.15);
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
 }
 
 .card-header {
@@ -374,10 +405,10 @@
     grid-template-columns: repeat(5, 1fr);
     gap: 0;
     margin-bottom: 3rem;
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(15, 16, 33, 0.55);
     padding: 2rem;
     border-radius: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
     align-items: center;
 }
 
@@ -432,8 +463,8 @@
 
     .timing-item.total {
         grid-column: 1 / -1;
-        background: rgba(30, 30, 40, 0.6);
-        border-color: rgba(255, 255, 255, 0.2);
+        background: rgba(43, 44, 67, 0.75);
+        border-color: rgba(34, 211, 238, 0.2);
     }
 
     .project-header {

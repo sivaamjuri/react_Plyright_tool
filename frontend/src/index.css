@@ -1,23 +1,40 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
 
 :root {
-  --bg-primary: #0f172a;
-  --bg-secondary: #1e293b;
+  /* Executive dark — midnight + slate purple */
+  --bg-primary: #0f1021;
+  --bg-secondary: #2b2c43;
+  --bg-tertiary: #16172a;
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
-  --accent-primary: #3b82f6;
-  --accent-secondary: #6366f1;
-  --glass-bg: rgba(30, 41, 59, 0.7);
-  --glass-border: rgba(148, 163, 184, 0.1);
+  --text-muted: #64748b;
+  /* Electric cyan + deep indigo accents */
+  --accent-primary: #22d3ee;
+  --accent-primary-dim: #0891b2;
+  --accent-secondary: #312e81;
+  --accent-indigo: #4338ca;
+  --glass-bg: rgba(43, 44, 67, 0.42);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-highlight: rgba(34, 211, 238, 0.14);
+  --shadow-elevated: 0 24px 80px -20px rgba(0, 0, 0, 0.55);
 }
 
 body {
   margin: 0;
   font-family: 'Inter', sans-serif;
-  background-color: var(--bg-primary);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
+  background-color: var(--bg-primary);
+  background-image:
+    radial-gradient(ellipse 90% 55% at 15% -10%, rgba(67, 56, 202, 0.38), transparent 52%),
+    radial-gradient(ellipse 70% 45% at 85% 5%, rgba(34, 211, 238, 0.09), transparent 48%),
+    radial-gradient(ellipse 55% 85% at 100% 60%, rgba(49, 46, 129, 0.32), transparent 55%),
+    radial-gradient(ellipse 50% 70% at 0% 85%, rgba(43, 44, 67, 0.55), transparent 58%),
+    linear-gradient(180deg, #0f1021 0%, #12142c 45%, #0f1021 100%);
+  background-attachment: fixed;
 }
 
 #root {
@@ -35,4 +52,45 @@ button {
   cursor: pointer;
   border: none;
   font-family: inherit;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.28);
+  color: var(--text-primary);
+}
+
+button:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Shared glass panels (e.g. Results) */
+.glass-panel {
+  background: var(--glass-bg);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: clamp(1rem, 2.2vw, 1.5rem);
+  width: 100%;
+  box-shadow:
+    var(--shadow-elevated),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* Monospace pill for file extensions (e.g. .zip) — use class="ext-tag" */
+.ext-tag {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.88em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 0.12em 0.4em;
+  border-radius: 4px;
+  background: rgba(15, 16, 33, 0.85);
+  border: 1px solid var(--glass-border);
+  color: #a5f3fc;
+  vertical-align: 0.08em;
+  white-space: nowrap;
 }

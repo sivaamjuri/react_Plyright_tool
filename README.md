@@ -126,7 +126,8 @@ react_Plyright_tool/
 
 ## Deploy (Backend AWS + Frontend Vercel)
 
-**Full step-by-step (env vars, EC2, Vercel, local files):** see **[DEPLOYMENT.md](./DEPLOYMENT.md)**.
+**Full step-by-step (env vars, EC2, Vercel, local files):** see **[DEPLOYMENT.md](./DEPLOYMENT.md)**.  
+**Architecture, CORS, networking, security (deep detail):** see **[DEPLOYMENT-DEEP-DIVE.md](./DEPLOYMENT-DEEP-DIVE.md)**.
 
 ### 1) Deploy backend to AWS (EC2)
 1. Launch an Ubuntu EC2 instance and open inbound rules for:
