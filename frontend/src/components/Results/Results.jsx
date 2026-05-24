@@ -122,7 +122,7 @@ const Results = ({ data }) => {
                                             <span className="route-icon">🔗</span>
                                             <h4>{name}</h4>
                                         </div>
-                                        <div className="mini-score">{info.score}% match</div>
+                                        <div className="mini-score">{info.score} match</div>
                                     </div>
 
                                     <div className="visual-grid">

@@ -40,7 +40,7 @@ A high-performance visual regression tool designed to automate the assessment of
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Getting Started (local machine)
 
 ### 1. Prerequisites
 - **Node.js**: Version 18 or higher recommended.
@@ -48,22 +48,45 @@ A high-performance visual regression tool designed to automate the assessment of
 
 ### 2. Installation
 ```bash
-# Clone the repository
-git clone <your-repo-url>
-cd VR_PROJECT
+git clone https://github.com/sivaamjuri/react_Plyright_tool.git
+cd react_Plyright_tool
 
-# Setup Backend
 cd backend
 npm install
+npx playwright install chromium
 
-# Setup Frontend
+# Required for Vite/React uploads: shared dependency folder (also auto-installs on first compare if missing)
+cd master_project
+npm install
+cd ..
+
 cd ../frontend
 npm install
 ```
 
-### 3. Execution
-1. **Start Backend**: `cd backend && npm start` (Runs on port 3000)
-2. **Start Frontend**: `cd frontend && npm run dev` (Runs on port 5173)
+### 3. Environment (local)
+Optional: copy the examples so you can edit values later. If you skip this, local defaults still work (backend allows `http://localhost:5173`; frontend targets `http://localhost:3000`).
+
+```bash
+# macOS / Linux / Git Bash
+cp backend/.env.example backend/.env
+cp frontend/.env.example frontend/.env
+```
+
+```powershell
+# Windows PowerShell (from repo root)
+Copy-Item backend\.env.example backend\.env -ErrorAction SilentlyContinue
+Copy-Item frontend\.env.example frontend\.env -ErrorAction SilentlyContinue
+```
+
+### 4. Run locally
+**Option A — Windows:** from the repo root, double-click or run `start-local.bat`, or in PowerShell: `.\start-local.ps1`
+
+**Option B — manual:** two terminals
+1. **Backend**: `cd backend && npm start` (listens on **http://localhost:3000**)
+2. **Frontend**: `cd frontend && npm run dev` (Vite on **http://localhost:5173**)
+
+Open **http://localhost:5173** in your browser.
 
 ---
 
@@ -82,7 +105,7 @@ npm install
 ## 🏗️ Project Structure
 
 ```text
-VR_PROJECT/
+react_Plyright_tool/
 ├── backend/
 │   ├── master_project/   # The shared dependency template
 │   ├── temp/             # Transient storage for unzipped projects
@@ -102,6 +125,8 @@ VR_PROJECT/
 ---
 
 ## Deploy (Backend AWS + Frontend Vercel)
+
+**Full step-by-step (env vars, EC2, Vercel, local files):** see **[DEPLOYMENT.md](./DEPLOYMENT.md)**.
 
 ### 1) Deploy backend to AWS (EC2)
 1. Launch an Ubuntu EC2 instance and open inbound rules for:

@@ -95,6 +95,57 @@ function killProcess(proc) {
     }
 }
 
+const MASTER_DIR = path.join(__dirname, 'master_project');
+const MASTER_MODULES = path.join(MASTER_DIR, 'node_modules');
+
+/**
+ * Shared node_modules for uploaded Vite/CRA apps (junction target).
+ * Without this install, junctions point at an empty folder and Vite fails with
+ * ERR_MODULE_NOT_FOUND for @vitejs/plugin-react.
+ */
+async function ensureMasterProjectNodeModules(portLabel = '') {
+    const marker = path.join(MASTER_MODULES, '@vitejs', 'plugin-react', 'package.json');
+    if (await fs.pathExists(marker)) return;
+
+    if (global.masterProjectInstallLock === undefined) global.masterProjectInstallLock = false;
+    while (global.masterProjectInstallLock) {
+        await new Promise((r) => setTimeout(r, 500));
+    }
+    if (await fs.pathExists(marker)) return;
+
+    global.masterProjectInstallLock = true;
+    const tag = portLabel ? `[${portLabel}] ` : '';
+    try {
+        log(`${tag}master_project/node_modules missing — running npm install in master_project (first run may take several minutes)...`);
+        const logFile = path.join(MASTER_DIR, 'npm-install.log');
+        await fs.ensureFile(logFile);
+        const out = fs.createWriteStream(logFile, { flags: 'a' });
+        await new Promise((resolve) => {
+            const inst = spawn(
+                'npm',
+                ['install', '--no-audit', '--no-fund', '--no-progress', '--legacy-peer-deps'],
+                { cwd: MASTER_DIR, shell: true, stdio: ['ignore', out, out] }
+            );
+            inst.on('close', (code) => {
+                out.end();
+                if (code !== 0) {
+                    log(`${tag}master_project npm install exited with code ${code} — see master_project/npm-install.log`);
+                } else {
+                    log(`${tag}master_project npm install finished successfully.`);
+                }
+                resolve();
+            });
+            inst.on('error', (err) => {
+                log(`${tag}master_project npm install spawn error: ${err.message}`);
+                out.end();
+                resolve();
+            });
+        });
+    } finally {
+        global.masterProjectInstallLock = false;
+    }
+}
+
 // Helper: Download GitHub Repo as ZIP
 async function downloadRepoAsZip(repoUrl, outputPath) {
     // Basic format: https://github.com/USER/REPO
@@ -257,6 +308,19 @@ function startServer(projectInfo, port) {
             if (global.isLearning === undefined) global.isLearning = false;
 
             const runStart = async () => {
+                await ensureMasterProjectNodeModules(port);
+                const vitePluginMarker = path.join(
+                    MASTER_MODULES,
+                    '@vitejs',
+                    'plugin-react',
+                    'package.json'
+                );
+                if (!(await fs.pathExists(vitePluginMarker))) {
+                    throw new Error(
+                        'master_project is missing Vite dependencies. Run: cd backend/master_project && npm install (see master_project/npm-install.log if auto-install ran).'
+                    );
+                }
+
                 // Determine missing dependencies or version mismatches
                 const studentDeps = { ...(studentPkg.dependencies || {}), ...(studentPkg.devDependencies || {}) };
                 const masterDir = path.join(__dirname, 'master_project');
@@ -422,7 +486,10 @@ function startServer(projectInfo, port) {
                 checkServerReady(port, finalBasePath, serverProc, resolve, reject, logPath);
             };
 
-            runStart();
+            runStart().catch((err) => {
+                log(`[${port}] runStart failed: ${err.message}`);
+                reject(err);
+            });
 
         } catch (e) {
             log(`[${port}] Setup failed: ${e.message}`);

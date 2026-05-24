@@ -53,52 +53,80 @@ const Home = () => {
       const decoder = new TextDecoder();
       let accumulated = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        accumulated += decoder.decode(value, { stream: true });
-        const lines = accumulated.split("\n");
-        accumulated = lines.pop(); // Keep the last partial line
-
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const json = JSON.parse(line);
-            if (
-              json.type === "status" ||
-              json.type === "start" ||
-              json.type === "progress"
-            ) {
-              setProgress((prev) => ({
-                ...prev,
-                message: json.message || prev.message,
-                total: json.total !== undefined ? json.total : prev.total,
-                type: json.type,
-              }));
-            } else if (json.type === "student_complete") {
-              setProgress((prev) => ({
-                ...prev,
-                current: prev.current + 1,
-                completedStudents: [
-                  {
-                    name: json.studentName,
-                    status: json.status,
-                    error: json.error,
-                    remarks: json.remarks,
-                  },
-                  ...prev.completedStudents,
-                ],
-              }));
-            } else if (json.type === "result") {
-              setResults(json.data);
-            } else if (json.type === "error") {
-              throw new Error(json.message);
-            }
-          } catch (e) {
-            console.error("Failed to parse stream line:", line, e);
+      const handleNdjsonLine = (line) => {
+        if (!line.trim()) return;
+        try {
+          const json = JSON.parse(line);
+          if (
+            json.type === "status" ||
+            json.type === "start" ||
+            json.type === "progress"
+          ) {
+            setProgress((prev) => ({
+              ...prev,
+              message: json.message || prev.message,
+              total: json.total !== undefined ? json.total : prev.total,
+              type: json.type,
+            }));
+          } else if (json.type === "student_complete") {
+            setProgress((prev) => ({
+              ...prev,
+              current: prev.current + 1,
+              completedStudents: [
+                {
+                  name: json.studentName,
+                  status: json.status,
+                  error: json.error,
+                  remarks: json.remarks,
+                },
+                ...prev.completedStudents,
+              ],
+            }));
+          } else if (json.type === "result") {
+            setResults(json.data);
+          } else if (json.type === "error") {
+            throw new Error(json.message);
+          }
+        } catch (e) {
+          if (e instanceof SyntaxError) {
+            console.error(
+              "Failed to parse stream line (truncated):",
+              line.slice(0, 240),
+              e
+            );
+          } else {
+            throw e;
           }
         }
+      };
+
+      let read;
+      while (true) {
+        read = await reader.read();
+        if (read.value) {
+          accumulated += decoder.decode(read.value, {
+            stream: !read.done,
+          });
+        }
+        if (read.done) {
+          accumulated += decoder.decode();
+          break;
+        }
+        const lines = accumulated.split("\n");
+        accumulated = lines.pop() ?? "";
+        for (const line of lines) {
+          handleNdjsonLine(line);
+        }
+      }
+      {
+        const lines = accumulated.split("\n");
+        accumulated = lines.pop() ?? "";
+        for (const line of lines) {
+          handleNdjsonLine(line);
+        }
+      }
+      if (accumulated.trim()) {
+        handleNdjsonLine(accumulated);
       }
     } catch (error) {
       console.error(error);
