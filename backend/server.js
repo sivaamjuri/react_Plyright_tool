@@ -185,45 +185,130 @@ async function downloadRepoAsZip(repoUrl, outputPath) {
     }
 }
 
-// Helper: Parse Excel for GitHub links
-function parseExcelForLinks(filePath) {
-    const workbook = xlsx.readFile(filePath);
-    const sheetName = workbook.SheetNames[0];
-    const sheet = workbook.Sheets[sheetName];
+// --- Excel: GitHub repo links (supports .xlsx / .xls, plain text + hyperlink cells) ---
 
-    // Get all rows as arrays to detect if the first row is data or header
-    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
-    if (rows.length === 0) return [];
+function stringifyCellDisplay(cell) {
+    if (!cell) return '';
+    if (cell.w != null) return String(cell.w).trim();
+    if (cell.v == null) return '';
+    if (cell.t === 'n' && typeof cell.v === 'number') return String(cell.v);
+    return String(cell.v).trim();
+}
 
-    const results = [];
-    const firstRowHasUrl = rows[0].some(cell => typeof cell === 'string' && cell.toLowerCase().includes('github.com'));
+function cellHyperlinkTarget(cell) {
+    if (!cell || !cell.l) return null;
+    const l = cell.l;
+    const t = l.Target || l.target || l.href;
+    return typeof t === 'string' ? t.trim() : null;
+}
 
-    if (firstRowHasUrl) {
-        // No header row, or first row IS a repository link. Process all rows.
-        rows.forEach(row => {
-            const githubUrl = row.find(cell => typeof cell === 'string' && cell.toLowerCase().includes('github.com'));
-            if (githubUrl) {
-                const name = row.find(cell =>
-                    cell && typeof cell === 'string' && cell !== githubUrl && !cell.toLowerCase().includes('github.com')
-                ) || githubUrl.split('/').pop() || 'Student';
-                results.push({ url: githubUrl, name });
-            }
-        });
-    } else {
-        // First row looks like headers (no github link). Use standard object-based parsing.
-        const data = xlsx.utils.sheet_to_json(sheet);
-        data.forEach(row => {
-            for (const [key, value] of Object.entries(row)) {
-                if (typeof value === 'string' && value.toLowerCase().includes('github.com')) {
-                    results.push({
-                        url: value,
-                        name: row['Name'] || row['Student Name'] || row['student_name'] || row['Username'] || value.split('/').pop() || 'Student'
-                    });
-                    break;
-                }
-            }
-        });
+/** Normalize to https GitHub repo root for downloadRepoAsZip */
+function normalizeRepoTaskUrl(raw) {
+    let u = String(raw || '').trim();
+    if (!u) return null;
+    if (/^git@github\.com:/i.test(u)) {
+        u = u.replace(/^git@github\.com:/i, 'https://github.com/').replace(/\.git$/i, '');
     }
+    if (!/^https?:\/\//i.test(u)) {
+        if (/^github\.com\//i.test(u)) u = `https://${u}`;
+        else if (/^www\.github\.com\//i.test(u)) u = `https://${u.replace(/^www\./i, '')}`;
+        else return null;
+    }
+    u = u.replace(/\/$/, '').replace(/\.git$/i, '');
+    let host;
+    try {
+        host = new URL(u).hostname.toLowerCase();
+    } catch {
+        return null;
+    }
+    if (host !== 'github.com' && host !== 'www.github.com') return null;
+    return u;
+}
+
+function pickGithubUrlFromCell(cell) {
+    if (!cell) return null;
+    const fromLink = normalizeRepoTaskUrl(cellHyperlinkTarget(cell));
+    if (fromLink) return fromLink;
+    const text = stringifyCellDisplay(cell);
+    if (text && text.toLowerCase().includes('github.com')) {
+        return normalizeRepoTaskUrl(text);
+    }
+    return null;
+}
+
+function repoDisplayNameFromUrl(url, rowLabel) {
+    const label = rowLabel && String(rowLabel).trim();
+    if (label && !/^https?:\/\//i.test(label) && !/^git@/i.test(label) && label.length <= 200) {
+        return label;
+    }
+    try {
+        const pathPart = url.replace(/^https?:\/\/github\.com\//i, '');
+        const seg = pathPart.split('/').filter(Boolean);
+        if (seg.length >= 2) return `${seg[0]}_${seg[1]}`;
+        return seg[0] || 'Student';
+    } catch {
+        return 'Student';
+    }
+}
+
+/**
+ * Parse first sheet: one repo per row. URL may be plain text or Excel hyperlink (display text can omit "github.com").
+ */
+function parseExcelForLinks(filePath) {
+    const buf = fs.readFileSync(filePath);
+    let workbook;
+    try {
+        workbook = xlsx.read(buf, { type: 'buffer', cellDates: true });
+    } catch (e) {
+        throw new Error(`Could not read workbook: ${e.message}. Try saving as .xlsx.`);
+    }
+    if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        return [];
+    }
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    if (!sheet || !sheet['!ref']) {
+        return [];
+    }
+
+    const range = xlsx.utils.decode_range(sheet['!ref']);
+    const results = [];
+    const seenUrls = new Set();
+
+    for (let R = range.s.r; R <= range.e.r; R++) {
+        let urlForRow = null;
+        let nameForRow = null;
+
+        for (let C = range.s.c; C <= range.e.c; C++) {
+            const addr = xlsx.utils.encode_cell({ r: R, c: C });
+            const cell = sheet[addr];
+            if (!cell) continue;
+
+            const url = pickGithubUrlFromCell(cell);
+            if (url) {
+                urlForRow = urlForRow || url;
+                continue;
+            }
+            const text = stringifyCellDisplay(cell);
+            if (
+                text &&
+                !/^https?:\/\//i.test(text) &&
+                !/^git@/i.test(text) &&
+                text.length <= 200 &&
+                !/^[=+\-@]/.test(text)
+            ) {
+                nameForRow = nameForRow || text;
+            }
+        }
+
+        if (urlForRow && !seenUrls.has(urlForRow)) {
+            seenUrls.add(urlForRow);
+            results.push({
+                url: urlForRow,
+                name: repoDisplayNameFromUrl(urlForRow, nameForRow),
+            });
+        }
+    }
+
     return results;
 }
 
@@ -787,16 +872,44 @@ app.post('/compare', upload.fields([{ name: 'solution' }, { name: 'student' }, {
 
         // Add Excel links
         if (studentExcel) {
+            let excelParseError = null;
             try {
                 const links = parseExcelForLinks(studentExcel.path);
-                links.forEach(link => {
-                    studentTasks.push({ type: 'repo', path: link.url, name: link.name });
-                });
-                // Optional: remove excel file after parsing
-                await fs.remove(studentExcel.path);
+                if (links.length === 0) {
+                    log('Excel: no GitHub repository URLs found in the first sheet.');
+                    sendProgress({
+                        type: 'status',
+                        message:
+                            'Excel had no usable GitHub links. Put https://github.com/user/repo in a cell or as a hyperlink (one repo per row).',
+                    });
+                } else {
+                    log(`Excel: parsed ${links.length} GitHub repo link(s).`);
+                    links.forEach((link) => {
+                        studentTasks.push({ type: 'repo', path: link.url, name: link.name });
+                    });
+                }
             } catch (e) {
+                excelParseError = e;
                 log(`Failed to parse Excel: ${e.message}`);
+                sendProgress({
+                    type: 'error',
+                    message: `Excel could not be read: ${e.message}`,
+                });
+            } finally {
+                await fs.remove(studentExcel.path).catch(() => {});
             }
+            if (excelParseError && studentFiles.length === 0) {
+                res.end();
+                return;
+            }
+        }
+
+        if (studentTasks.length === 0) {
+            const msg =
+                'No student projects to process. Upload ZIP file(s) and/or add GitHub repository URLs to your Excel sheet.';
+            sendProgress({ type: 'error', message: msg });
+            res.end();
+            return;
         }
 
         // 3. Process Students in Batches
