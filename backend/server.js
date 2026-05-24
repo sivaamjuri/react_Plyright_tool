@@ -44,12 +44,17 @@ const PLAYWRIGHT_GOTO_TIMEOUT_MS = Math.min(
 
 /**
  * V8 heap cap (MB) for the Node process spawned for `npm install` in temp project dirs.
- * Lower if the host OOMs during install; raise only if installs fail with JS heap errors.
+ * Default 1024 is safer on 2–4 GB RAM hosts; raise if npm fails with JavaScript heap out of memory.
  */
 const NPM_INSTALL_HEAP_MB = Math.min(
     8192,
-    Math.max(256, Number.parseInt(process.env.NPM_INSTALL_HEAP_MB || '2048', 10) || 2048)
+    Math.max(256, Number.parseInt(process.env.NPM_INSTALL_HEAP_MB || '1024', 10) || 1024)
 );
+
+/**
+ * Omit optional dependencies during temp installs (smaller tree, less RAM). Set 0/false if a project needs them.
+ */
+const NPM_INSTALL_OMIT_OPTIONAL = !/^(0|false|no)$/i.test(String(process.env.NPM_INSTALL_OMIT_OPTIONAL ?? '1'));
 
 /**
  * When true (default), project `npm install` runs one-at-a-time. Parallel installs on small EC2
@@ -63,10 +68,57 @@ let npmInstallQueueTail = Promise.resolve();
 function buildNpmInstallChildEnv() {
     const env = { ...process.env, CI: 'true' };
     env.NPM_CONFIG_MAXSOCKETS = process.env.NPM_CONFIG_MAXSOCKETS || '1';
+    if (process.env.NPM_CONFIG_FOREGROUND_SCRIPTS === undefined) {
+        env.NPM_CONFIG_FOREGROUND_SCRIPTS = 'true';
+    }
     const prev = (env.NODE_OPTIONS || '').trim();
     const cap = `--max-old-space-size=${NPM_INSTALL_HEAP_MB}`;
     env.NODE_OPTIONS = prev ? `${prev} ${cap}` : cap;
     return env;
+}
+
+/** argv for `npm <argv>` full install in a project or master_project. */
+function getNpmInstallArgv(...extra) {
+    const argv = [
+        'install',
+        '--no-audit',
+        '--no-fund',
+        '--no-progress',
+        '--legacy-peer-deps',
+        '--prefer-offline',
+        ...(NPM_INSTALL_OMIT_OPTIONAL ? ['--omit=optional'] : []),
+        ...String(process.env.NPM_INSTALL_EXTRA_FLAGS || '')
+            .trim()
+            .split(/\s+/)
+            .filter(Boolean),
+        ...extra,
+    ];
+    return argv;
+}
+
+/**
+ * Run `npm` with argv; append stdout/stderr to logFile. Resolves with exit code.
+ */
+function runNpmWithArgv(cwd, logFile, argv) {
+    return new Promise((resolve, reject) => {
+        const inst = spawn('npm', argv, {
+            cwd,
+            shell: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: buildNpmInstallChildEnv(),
+        });
+        const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+        inst.stdout?.pipe(logStream);
+        inst.stderr?.pipe(logStream);
+        inst.on('close', (code) => {
+            logStream.end();
+            resolve(code);
+        });
+        inst.on('error', (err) => {
+            logStream.end();
+            reject(err);
+        });
+    });
 }
 
 /** Run a heavy `npm install`; by default serializes with other installs to reduce OOM (exit 137). */
@@ -254,35 +306,23 @@ async function ensureMasterProjectNodeModules(portLabel = '') {
         const logFile = path.join(MASTER_DIR, 'npm-install.log');
         await fs.ensureFile(logFile);
         await enqueueNpmInstallSerialized(async () => {
-            await new Promise((resolve) => {
-                const inst = spawn(
-                    'npm',
-                    ['install', '--no-audit', '--no-fund', '--no-progress', '--legacy-peer-deps'],
-                    {
-                        cwd: MASTER_DIR,
-                        shell: true,
-                        stdio: ['ignore', 'pipe', 'pipe'],
-                        env: buildNpmInstallChildEnv(),
-                    }
-                );
-                const logStream = fs.createWriteStream(logFile, { flags: 'a' });
-                inst.stdout?.pipe(logStream);
-                inst.stderr?.pipe(logStream);
-                inst.on('close', (code) => {
-                    logStream.end();
-                    if (code !== 0) {
-                        log(`${tag}master_project npm install exited with code ${code} — see master_project/npm-install.log`);
-                    } else {
-                        log(`${tag}master_project npm install finished successfully.`);
-                    }
-                    resolve();
-                });
-                inst.on('error', (err) => {
-                    log(`${tag}master_project npm install spawn error: ${err.message}`);
-                    logStream.end();
-                    resolve();
-                });
-            });
+            try {
+                const argv = getNpmInstallArgv();
+                let code = await runNpmWithArgv(MASTER_DIR, logFile, argv);
+                if (code === 137) {
+                    log(`${tag}master_project npm install exited 137 — retrying once after 8s...`);
+                    await new Promise((r) => setTimeout(r, 8000));
+                    await fs.appendFile(logFile, `\n\n--- retry after exit 137 ${new Date().toISOString()} ---\n\n`);
+                    code = await runNpmWithArgv(MASTER_DIR, logFile, argv);
+                }
+                if (code !== 0) {
+                    log(`${tag}master_project npm install exited with code ${code} — see master_project/npm-install.log`);
+                } else {
+                    log(`${tag}master_project npm install finished successfully.`);
+                }
+            } catch (err) {
+                log(`${tag}master_project npm install error: ${err.message}`);
+            }
         });
     } finally {
         global.masterProjectInstallLock = false;
@@ -570,37 +610,23 @@ async function npmInstallInProject(projectDir, port) {
         log(
             `[${port}] Running npm install in project${NPM_INSTALL_SERIALIZE ? ' (queued, one at a time)' : ''} — see npm-install.log`
         );
-        await new Promise((resolve, reject) => {
-            const inst = spawn(
-                'npm',
-                ['install', '--no-audit', '--no-fund', '--no-progress', '--legacy-peer-deps'],
-                {
-                    cwd: projectDir,
-                    shell: true,
-                    stdio: ['ignore', 'pipe', 'pipe'],
-                    env: buildNpmInstallChildEnv(),
-                }
-            );
-            const logStream = fs.createWriteStream(logFile, { flags: 'a' });
-            inst.stdout?.pipe(logStream);
-            inst.stderr?.pipe(logStream);
-            inst.on('close', (code) => {
-                logStream.end();
-                if (code !== 0) {
-                    let hint =
-                        ' CRA/Vite projects need a real node_modules under the repo (not a symlink to master_project).';
-                    if (code === 137) {
-                        hint =
-                            ' Exit 137 is usually the Linux OOM killer (SIGKILL): the host ran out of RAM during npm install. Add swap, use a larger EC2 type, lower NPM_INSTALL_HEAP_MB, or keep NPM_INSTALL_SERIALIZE=1 (default) so only one install runs at a time.';
-                    }
-                    reject(new Error(`npm install in project exited with code ${code}. See ${logFile}.${hint}`));
-                } else resolve();
-            });
-            inst.on('error', (err) => {
-                logStream.end();
-                reject(err);
-            });
-        });
+        const argv = getNpmInstallArgv();
+        let code = await runNpmWithArgv(projectDir, logFile, argv);
+        if (code === 137) {
+            log(`[${port}] npm install exited 137 — waiting 8s and retrying once (transient OOM)...`);
+            await new Promise((r) => setTimeout(r, 8000));
+            await fs.appendFile(logFile, `\n\n--- npm install retry (previous exit 137) ${new Date().toISOString()} ---\n\n`);
+            code = await runNpmWithArgv(projectDir, logFile, argv);
+        }
+        if (code !== 0) {
+            let hint =
+                ' CRA/Vite projects need a real node_modules under the repo (not a symlink to master_project).';
+            if (code === 137) {
+                hint =
+                    ' Exit 137 = Linux OOM killer (out of RAM). Add swap or use a larger EC2 instance; try NPM_INSTALL_HEAP_MB=512, keep NPM_INSTALL_SERIALIZE=1 (default), and see DEPLOYMENT.md → “Adding swap (exit 137)”.';
+            }
+            throw new Error(`npm install in project exited with code ${code}. See ${logFile}.${hint}`);
+        }
     });
 }
 
@@ -707,10 +733,25 @@ function startServer(projectInfo, port) {
                         log(`[${port}] Learning/Upgrading dependencies: ${stillMissing.join(', ')}...`);
                         try {
                             const installResult = await new Promise((res) => {
-                                const inst = spawn('npm', ['install', '--save', ...stillMissing, '--no-audit', '--no-fund', '--no-progress', '--legacy-peer-deps'], {
-                                    cwd: masterDir,
-                                    shell: true
-                                });
+                                const inst = spawn(
+                                    'npm',
+                                    [
+                                        'install',
+                                        '--save',
+                                        ...stillMissing,
+                                        '--no-audit',
+                                        '--no-fund',
+                                        '--no-progress',
+                                        '--legacy-peer-deps',
+                                        '--prefer-offline',
+                                        ...(NPM_INSTALL_OMIT_OPTIONAL ? ['--omit=optional'] : []),
+                                    ],
+                                    {
+                                        cwd: masterDir,
+                                        shell: true,
+                                        env: buildNpmInstallChildEnv(),
+                                    }
+                                );
 
                                 let errOutput = '';
                                 inst.stderr?.on('data', (data) => errOutput += data.toString());

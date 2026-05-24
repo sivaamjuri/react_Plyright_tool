@@ -490,7 +490,23 @@ Restart `npm run dev` after changing `.env`.
 | `ERR_MODULE_NOT_FOUND` / Vite on uploads | On the server, `master_project/node_modules` exists — run `cd backend/master_project && npm install`. |
 | CRA: “outside of the project src/” / paths under `master_project/node_modules/react-refresh` | Deploy latest `server.js`: CRA no longer uses the shared junction; each CRA ZIP runs a local `npm install` (slower, more disk). |
 | “exited too early” right after `Starting the development server` | Often a **compile error** (see `temp/.../student_*/dev-server.log`) or **OOM** — raise RAM or `WEBPACK_DEV_HEAP_MB`. |
-| **`npm install` exit 137** (especially under `solution_raw/` or `student_*/`) | **Linux OOM killer** (out of RAM). Defaults: **serialized** installs (`NPM_INSTALL_SERIALIZE=1`) + `NPM_CONFIG_MAXSOCKETS=1`. Add **swap** (e.g. 4G file on gp3) or use a **larger instance**; optionally lower `NPM_INSTALL_HEAP_MB` (e.g. 1024). |
+| **`npm install` exit 137** (especially under `solution_raw/` or `student_*/`) | **Linux OOM killer** (out of RAM). Code defaults: serialized installs, `--omit=optional`, `--prefer-offline`, foreground scripts, **1024 MB** npm heap, **one automatic retry** after 8s. Add **swap** (see below) or a **larger instance**; in `backend/.env` try `NPM_INSTALL_HEAP_MB=512` or `NPM_INSTALL_OMIT_OPTIONAL=0` only if a package truly needs optional deps. |
+
+### Adding swap (exit 137 / OOM during `npm install`)
+
+On Ubuntu (run once; 4G example; uses root):
+
+```bash
+# Skip if /swapfile already exists and swapon shows it active (`swapon --show`).
+sudo fallocate -l 4G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096 status=progress
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+free -h
+```
+
+Then **`pm2 restart ui-similarity-api`** and retry the compare.
 
 ---
 
