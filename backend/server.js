@@ -53,7 +53,8 @@ const NPM_INSTALL_HEAP_MB = Math.min(
 );
 
 /**
- * Omit optional dependencies during temp installs (smaller tree, less RAM). Set 0/false if a project needs them.
+ * When true (default), temp-project `npm install` uses `--omit=optional` to save RAM/disk.
+ * Never applied to `master_project` installs — Vite/Rollup need optional `@rollup/rollup-*` native bindings.
  */
 const NPM_INSTALL_OMIT_OPTIONAL = !/^(0|false|no)$/i.test(String(process.env.NPM_INSTALL_OMIT_OPTIONAL ?? '1'));
 
@@ -78,8 +79,13 @@ function buildNpmInstallChildEnv() {
     return env;
 }
 
-/** argv for `npm <argv>` full install in a project or master_project. */
-function getNpmInstallArgv(...extra) {
+/**
+ * argv for `npm install`.
+ * @param {boolean|undefined} omitOptionalDeps - if `false`, never add `--omit=optional` (required for `master_project` / Rollup natives). If `undefined`, use env `NPM_INSTALL_OMIT_OPTIONAL` (temp CRA installs).
+ */
+function getNpmInstallArgv(omitOptionalDeps, ...extra) {
+    const omit =
+        omitOptionalDeps === undefined ? NPM_INSTALL_OMIT_OPTIONAL : Boolean(omitOptionalDeps);
     const argv = [
         'install',
         '--no-audit',
@@ -87,7 +93,7 @@ function getNpmInstallArgv(...extra) {
         '--no-progress',
         '--legacy-peer-deps',
         '--prefer-offline',
-        ...(NPM_INSTALL_OMIT_OPTIONAL ? ['--omit=optional'] : []),
+        ...(omit ? ['--omit=optional'] : []),
         ...String(process.env.NPM_INSTALL_EXTRA_FLAGS || '')
             .trim()
             .split(/\s+/)
@@ -318,7 +324,7 @@ async function ensureMasterProjectNodeModules(portLabel = '') {
         await fs.ensureFile(logFile);
         await enqueueNpmInstallSerialized(async () => {
             try {
-                const argv = getNpmInstallArgv();
+                const argv = getNpmInstallArgv(false);
                 let code = await runNpmWithArgv(MASTER_DIR, logFile, argv);
                 if (code === 137) {
                     log(`${tag}master_project npm install exited 137 — retrying once after 8s...`);
@@ -808,7 +814,6 @@ function startServer(projectInfo, port) {
                                         '--no-progress',
                                         '--legacy-peer-deps',
                                         '--prefer-offline',
-                                        ...(NPM_INSTALL_OMIT_OPTIONAL ? ['--omit=optional'] : []),
                                     ],
                                     {
                                         cwd: masterDir,
