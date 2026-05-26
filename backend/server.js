@@ -715,11 +715,37 @@ function npmInstallLooksLikeNetworkError(tail) {
     );
 }
 
-/** Single-line excerpt for Error.message (UI / PM2). */
-function formatNpmTailForError(tail, maxLen = 700) {
-    const t = (tail || '').replace(/\s+/g, ' ').trim();
-    if (!t) return '';
-    return t.length <= maxLen ? t : `${t.slice(0, maxLen)}…`;
+/**
+ * Prefer real failure lines (`npm ERR!`, ERESOLVE, engine errors). Trailing `npm warn deprecated` is not the cause of exit 1.
+ */
+function extractNpmInstallErrorSnippet(text, maxLen = 900) {
+    if (!text || !String(text).trim()) return '';
+    const lines = String(text).replace(/\r\n/g, '\n').split('\n');
+    const errLine = (L) =>
+        /^\s*npm ERR!/i.test(L) ||
+        /\bERESOLVE\b|peer dependency|Unsupported engine|EBADENGINE|ENOTEMPTY|EACCES|syscall connect|404 Not Found|code E404/i.test(
+            L
+        );
+    let lastErr = -1;
+    for (let i = lines.length - 1; i >= 0; i--) {
+        if (errLine(lines[i])) {
+            lastErr = i;
+            break;
+        }
+    }
+    let pick;
+    if (lastErr >= 0) {
+        const start = Math.max(0, lastErr - 3);
+        pick = lines.slice(start).join('\n').trim();
+    } else {
+        const nonWarn = lines.filter((L) => {
+            const t = L.trim();
+            return t && !/^\s*npm warn /i.test(L);
+        });
+        pick = nonWarn.slice(-30).join('\n').trim() || lines.slice(-20).join('\n').trim();
+    }
+    const one = pick.replace(/\s+/g, ' ').trim();
+    return one.length <= maxLen ? one : `${one.slice(0, maxLen)}…`;
 }
 
 async function npmInstallInProject(projectDir, port) {
@@ -738,7 +764,7 @@ async function npmInstallInProject(projectDir, port) {
             code = await runNpmWithArgv(projectDir, logFile, argv);
         }
         if (code !== 0) {
-            let tail = await readTextFileTail(logFile, 32);
+            let tail = await readTextFileTail(logFile, 120);
             if (tail) {
                 log(`[${port}] npm-install.log (tail):\n${tail}`);
             }
@@ -748,21 +774,21 @@ async function npmInstallInProject(projectDir, port) {
                 await fs.appendFile(logFile, `\n\n--- npm install retry (network) ${new Date().toISOString()} ---\n\n`);
                 code = await runNpmWithArgv(projectDir, logFile, argv);
                 if (code === 0) return;
-                tail = await readTextFileTail(logFile, 32);
+                tail = await readTextFileTail(logFile, 120);
                 if (tail) log(`[${port}] npm-install.log (tail after retry):\n${tail}`);
             }
         }
         if (code !== 0) {
-            const tail = await readTextFileTail(logFile, 32);
-            const excerpt = formatNpmTailForError(tail);
+            const tail = await readTextFileTail(logFile, 120);
+            const excerpt = extractNpmInstallErrorSnippet(tail);
             let hint = '';
             if (code === 137) {
                 hint =
                     ' Exit 137 = Linux OOM killer (out of RAM). Add swap or use a larger EC2 instance; try NPM_INSTALL_HEAP_MB=512, keep NPM_INSTALL_SERIALIZE=1 (default), and see DEPLOYMENT.md → “Adding swap (exit 137)”.';
             } else if (code === 1) {
-                hint = ` npm exited 1 (dependency or registry error).${excerpt ? ` Last lines: ${excerpt}` : ''}`;
+                hint = ` npm exited 1 (see npm ERR! / ERESOLVE / engine in log — trailing "npm warn deprecated" is usually harmless).${excerpt ? ` Snippet: ${excerpt}` : ''}`;
             } else {
-                hint = excerpt ? ` Last lines: ${excerpt}` : '';
+                hint = excerpt ? ` Snippet: ${excerpt}` : '';
             }
             throw new Error(`npm install in project exited with code ${code}. See ${logFile}.${hint}`);
         }
