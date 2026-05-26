@@ -731,9 +731,10 @@ function extractNpmInstallErrorSnippet(text, maxLen = 900) {
         return (
             /^\s*npm ERR!/i.test(L) ||
             /^\s*npm error\b/i.test(L) ||
-            /\bERESOLVE\b|peer dependency|Unsupported engine|EBADENGINE|ENOTEMPTY|EACCES|syscall connect|404 Not Found|code E404/i.test(
+            /\bERESOLVE\b|peer dependency|Unsupported engine|EBADENGINE|ENOTEMPTY|EACCES|syscall connect|ENOSPC|no space left on device|TAR_ENTRY_ERROR/i.test(
                 L
-            )
+            ) ||
+            /\b404 Not Found\b|code E404/i.test(L)
         );
     };
     let lastErr = -1;
@@ -826,7 +827,12 @@ async function npmInstallInProject(projectDir, port) {
                 hint =
                     ' Exit 137 = Linux OOM killer (out of RAM). Add swap or use a larger EC2 instance; try NPM_INSTALL_HEAP_MB=512, keep NPM_INSTALL_SERIALIZE=1 (default), and see DEPLOYMENT.md → “Adding swap (exit 137)”.';
             } else if (code === 1) {
-                hint = ` npm exited 1 (see Snippet for ERESOLVE / engine / audit — trailing "npm warn deprecated" is usually harmless).${excerpt ? ` Snippet: ${excerpt}` : ''}`;
+                const diskFull =
+                    /\bENOSPC\b|no space left on device/i.test(`${tail || ''}\n${excerpt || ''}`);
+                const diskHint = diskFull
+                    ? ' DISK FULL (ENOSPC): run df -h; clear backend/temp, /var/lib/nginx/body, npm cache clean --force; grow EBS if needed. '
+                    : '';
+                hint = ` npm exited 1.${diskHint}(See Snippet for ERESOLVE / engine / audit / ENOSPC — trailing "npm warn deprecated" is usually harmless.)${excerpt ? ` Snippet: ${excerpt}` : ''}`;
             } else {
                 hint = excerpt ? ` Snippet: ${excerpt}` : '';
             }
