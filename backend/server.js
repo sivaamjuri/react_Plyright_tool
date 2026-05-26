@@ -346,6 +346,75 @@ async function ensureMasterProjectNodeModules(portLabel = '') {
     }
 }
 
+/** Optional native packages esbuild + Rollup need on Linux under master_project/node_modules (shared Vite installs). */
+function getLinuxNativeToolingPackages() {
+    if (process.platform !== 'linux') return [];
+    switch (process.arch) {
+        case 'x64':
+            return ['@esbuild/linux-x64', '@rollup/rollup-linux-x64-gnu'];
+        case 'arm64':
+            return ['@esbuild/linux-arm64', '@rollup/rollup-linux-arm64-gnu'];
+        default:
+            return [];
+    }
+}
+
+/**
+ * Ensure platform esbuild / Rollup binaries exist in master_project after install or "learning" upgrades.
+ * Avoids: "The package \"@esbuild/linux-x64\" could not be found" when optional deps were omitted or pruned.
+ */
+async function ensureMasterNativeTooling(portLabel = '') {
+    const pkgs = getLinuxNativeToolingPackages();
+    if (!pkgs.length) return;
+    const tag = portLabel ? `[${portLabel}] ` : '';
+    const missing = [];
+    for (const pkg of pkgs) {
+        const marker = path.join(MASTER_MODULES, ...pkg.split('/'), 'package.json');
+        if (!(await fs.pathExists(marker))) missing.push(pkg);
+    }
+    if (!missing.length) return;
+    log(`${tag}Installing missing native tooling in master_project: ${missing.join(', ')}...`);
+    await enqueueNpmInstallSerialized(async () => {
+        const logFile = path.join(MASTER_DIR, 'npm-install-native.log');
+        await fs.ensureFile(logFile);
+        const argv = [
+            'install',
+            '--no-save',
+            '--no-audit',
+            '--no-fund',
+            '--no-progress',
+            '--legacy-peer-deps',
+            ...missing,
+        ];
+        const code = await runNpmWithArgv(MASTER_DIR, logFile, argv);
+        if (code !== 0) {
+            log(`${tag}master_project native tooling npm exited ${code} — see master_project/npm-install-native.log`);
+        }
+    });
+}
+
+/**
+ * Delete a directory tree (student temp dirs). fs-extra.remove can fail with ENOTEMPTY on webpack/babel caches;
+ * use fs.rm retries then rm -rf on POSIX.
+ */
+async function removeTreeAggressive(dirPath, contextLabel = '') {
+    if (!(await fs.pathExists(dirPath))) return;
+    const label = contextLabel ? ` (${contextLabel})` : '';
+    try {
+        await fsp.rm(dirPath, { recursive: true, force: true, maxRetries: 12, retryDelay: 200 });
+    } catch (e1) {
+        log(`removeTreeAggressive fs.rm failed${label}: ${e1.message}`);
+        if (process.platform === 'win32') throw e1;
+        await new Promise((resolve, reject) => {
+            const child = spawn('rm', ['-rf', dirPath], { shell: false });
+            child.on('error', reject);
+            child.on('close', (code) =>
+                code === 0 ? resolve() : reject(new Error(`rm -rf exited ${code}`))
+            );
+        });
+    }
+}
+
 // Helper: Download GitHub Repo as ZIP
 async function downloadRepoAsZip(repoUrl, outputPath) {
     // Basic format: https://github.com/USER/REPO
@@ -885,6 +954,8 @@ function startServer(projectInfo, port) {
                     // Give it a moment to start
                     await new Promise(r => setTimeout(r, 2000));
                 }
+
+                await ensureMasterNativeTooling(port);
 
                 log(`[${port}] Starting server...`);
                 const logPath = path.join(projectDir, 'dev-server.log');
@@ -1619,7 +1690,11 @@ app.post('/compare', compareUpload, async (req, res) => {
                     }
                     // DISK CLEANUP: Delete the extracted project to avoid filling up AWS disk
                     const stuWorkDir = path.join(runDir, stuId);
-                    await fs.remove(stuWorkDir).catch(e => log(`Cleanup error for ${stuId}: ${e.message}`));
+                    try {
+                        await removeTreeAggressive(stuWorkDir, stuId);
+                    } catch (e) {
+                        log(`Cleanup error for ${stuId}: ${e.message}`);
+                    }
                     log(`[Cleanup] Deleted ${stuId} to free up disk space.`);
                 }
             });

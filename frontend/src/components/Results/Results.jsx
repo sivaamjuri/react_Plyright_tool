@@ -30,8 +30,10 @@ const Results = ({ data }) => {
                         const excelData = data.results.map(res => ({
                             'Student Name': res.studentName,
                             'GitHub Repository': res.repoUrl || 'N/A',
+                            Status: res.status === 'success' ? 'Success' : 'Failed',
                             'Similarity Score': res.status === 'success' ? `${res.overallScore}%` : '0%',
-                            'Remarks': res.remarks || 'No remarks available.'
+                            Remarks: res.remarks || 'No remarks available.',
+                            'Failure / error (if any)': res.status === 'error' ? (res.error || '') : '',
                         }));
 
                         const ws = XLSX.utils.json_to_sheet(excelData);
