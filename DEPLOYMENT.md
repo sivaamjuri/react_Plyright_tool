@@ -492,6 +492,7 @@ Restart `npm run dev` after changing `.env`.
 | CRA: “outside of the project src/” / paths under `master_project/node_modules/react-refresh` | Deploy latest `server.js`: CRA no longer uses the shared junction; each CRA ZIP runs a local `npm install` (slower, more disk). |
 | “exited too early” right after `Starting the development server` | Often a **compile error** (see `temp/.../student_*/dev-server.log`) or **OOM** — raise RAM or `WEBPACK_DEV_HEAP_MB`. |
 | **`npm install` exit 137** (especially under `solution_raw/` or `student_*/`) | **Linux OOM killer** (out of RAM). Code defaults: serialized installs, `--omit=optional`, `--prefer-offline`, foreground scripts, **1024 MB** npm heap, **one automatic retry** after 8s. Add **swap** (see below) or a **larger instance**; in `backend/.env` try `NPM_INSTALL_HEAP_MB=512` or `NPM_INSTALL_OMIT_OPTIONAL=0` only if a package truly needs optional deps. |
+| Message only says **“complete log … in `~/.npm/_logs/…-debug-0.log`”** | Newer npm puts the real error in that file. Latest `server.js` reads that path from the project log and surfaces the real snippet. To inspect manually: `tail -100 /home/ubuntu/.npm/_logs/<that-filename>.log` (user may differ from `ubuntu`). |
 
 ### Adding swap (exit 137 / OOM during `npm install`)
 

@@ -715,17 +715,27 @@ function npmInstallLooksLikeNetworkError(tail) {
     );
 }
 
+function npmIsCompleteLogPointerLine(L) {
+    return /A complete log of this run can be found in/i.test(L);
+}
+
 /**
- * Prefer real failure lines (`npm ERR!`, ERESOLVE, engine errors). Trailing `npm warn deprecated` is not the cause of exit 1.
+ * Prefer real failure lines (`npm ERR!`, `npm error`, ERESOLVE, engine errors).
+ * Ignores npm's "complete log in ~/.npm/_logs/…" pointer here — use {@link tryReadNpmDebugLogExcerpt} for that file.
  */
 function extractNpmInstallErrorSnippet(text, maxLen = 900) {
     if (!text || !String(text).trim()) return '';
     const lines = String(text).replace(/\r\n/g, '\n').split('\n');
-    const errLine = (L) =>
-        /^\s*npm ERR!/i.test(L) ||
-        /\bERESOLVE\b|peer dependency|Unsupported engine|EBADENGINE|ENOTEMPTY|EACCES|syscall connect|404 Not Found|code E404/i.test(
-            L
+    const errLine = (L) => {
+        if (npmIsCompleteLogPointerLine(L)) return false;
+        return (
+            /^\s*npm ERR!/i.test(L) ||
+            /^\s*npm error\b/i.test(L) ||
+            /\bERESOLVE\b|peer dependency|Unsupported engine|EBADENGINE|ENOTEMPTY|EACCES|syscall connect|404 Not Found|code E404/i.test(
+                L
+            )
         );
+    };
     let lastErr = -1;
     for (let i = lines.length - 1; i >= 0; i--) {
         if (errLine(lines[i])) {
@@ -740,12 +750,36 @@ function extractNpmInstallErrorSnippet(text, maxLen = 900) {
     } else {
         const nonWarn = lines.filter((L) => {
             const t = L.trim();
-            return t && !/^\s*npm warn /i.test(L);
+            return t && !/^\s*npm warn /i.test(L) && !npmIsCompleteLogPointerLine(L);
         });
         pick = nonWarn.slice(-30).join('\n').trim() || lines.slice(-20).join('\n').trim();
     }
     const one = pick.replace(/\s+/g, ' ').trim();
     return one.length <= maxLen ? one : `${one.slice(0, maxLen)}…`;
+}
+
+/**
+ * npm 7+ often prints only "npm error A complete log of this run can be found in: …/.npm/_logs/…-debug-0.log"
+ * to stdout/stderr; real errors are in that debug file. Read its tail when the path appears in project output.
+ */
+async function tryReadNpmDebugLogExcerpt(projectLogTail, maxLen = 1200) {
+    const re = /(\/[\w./~-]+\/\.npm\/_logs\/\S+\.log)/g;
+    const paths = [];
+    let m;
+    while ((m = re.exec(String(projectLogTail || '')))) paths.push(m[1]);
+    if (!paths.length) return '';
+    for (let i = paths.length - 1; i >= 0; i--) {
+        const p = paths[i];
+        try {
+            if (!(await fs.pathExists(p))) continue;
+            const dt = await readTextFileTail(p, 140);
+            const snip = extractNpmInstallErrorSnippet(dt, maxLen);
+            if (snip) return snip;
+        } catch {
+            /* ignore */
+        }
+    }
+    return '';
 }
 
 async function npmInstallInProject(projectDir, port) {
@@ -780,13 +814,19 @@ async function npmInstallInProject(projectDir, port) {
         }
         if (code !== 0) {
             const tail = await readTextFileTail(logFile, 120);
-            const excerpt = extractNpmInstallErrorSnippet(tail);
+            let excerpt = extractNpmInstallErrorSnippet(tail);
+            const fromDebug = await tryReadNpmDebugLogExcerpt(tail);
+            if (fromDebug) excerpt = fromDebug;
+            else if (/complete log of this run/i.test(tail) && excerpt && npmIsCompleteLogPointerLine(excerpt)) {
+                excerpt =
+                    `${excerpt} (Could not read ~/.npm/_logs debug file from API process — on the server run: tail -80 on the path printed above.)`;
+            }
             let hint = '';
             if (code === 137) {
                 hint =
                     ' Exit 137 = Linux OOM killer (out of RAM). Add swap or use a larger EC2 instance; try NPM_INSTALL_HEAP_MB=512, keep NPM_INSTALL_SERIALIZE=1 (default), and see DEPLOYMENT.md → “Adding swap (exit 137)”.';
             } else if (code === 1) {
-                hint = ` npm exited 1 (see npm ERR! / ERESOLVE / engine in log — trailing "npm warn deprecated" is usually harmless).${excerpt ? ` Snippet: ${excerpt}` : ''}`;
+                hint = ` npm exited 1 (see Snippet for ERESOLVE / engine / audit — trailing "npm warn deprecated" is usually harmless).${excerpt ? ` Snippet: ${excerpt}` : ''}`;
             } else {
                 hint = excerpt ? ` Snippet: ${excerpt}` : '';
             }
