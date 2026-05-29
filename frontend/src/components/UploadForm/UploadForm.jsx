@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import JSZip from "jszip";
 import FileProcessingModal from "../FileProcessingModal/FileProcessingModal";
 import "./UploadForm.css";
@@ -15,6 +15,23 @@ const UploadForm = ({
   const [useExcel, setUseExcel] = useState(false);
   const [error, setError] = useState(null);
   const [status, setStatus] = useState("");
+
+  const solutionInputRef = useRef(null);
+  const studentInputRef = useRef(null);
+  const excelInputRef = useRef(null);
+
+  const hasAnyFile =
+    Boolean(solutionFile) || studentFiles.length > 0 || Boolean(excelFile);
+
+  const clearAllSelections = () => {
+    setSolutionFile(null);
+    setStudentFiles([]);
+    setExcelFile(null);
+    setError(null);
+    if (solutionInputRef.current) solutionInputRef.current.value = "";
+    if (studentInputRef.current) studentInputRef.current.value = "";
+    if (excelInputRef.current) excelInputRef.current.value = "";
+  };
 
   const progressPercent =
     progress && progress.total > 0
@@ -46,7 +63,9 @@ const UploadForm = ({
       if (count === 0) return file;
 
       const content = await newZip.generateAsync({ type: "blob" });
-      return new File([content], file.name, { type: "application/zip" });
+      const safeName =
+        (file.name && String(file.name).trim()) || "submission.zip";
+      return new File([content], safeName, { type: "application/zip" });
     } catch (e) {
       console.error(`Optimization failed for ${label}, sending original.`, e);
       return file;
@@ -155,6 +174,7 @@ const UploadForm = ({
                 </label>
                 <input
                   id="upload-solution-zip"
+                  ref={solutionInputRef}
                   type="file"
                   accept=".zip"
                   onChange={(e) =>
@@ -231,6 +251,7 @@ const UploadForm = ({
                   </label>
                   <input
                     id="upload-student-zips"
+                    ref={studentInputRef}
                     type="file"
                     accept=".zip"
                     multiple
@@ -253,6 +274,7 @@ const UploadForm = ({
                   </label>
                   <input
                     id="upload-excel"
+                    ref={excelInputRef}
                     type="file"
                     accept=".xlsx,.xls"
                     onChange={(e) =>
@@ -267,6 +289,19 @@ const UploadForm = ({
               )}
             </section>
           </div>
+
+          {hasAnyFile && !isLoading && (
+            <div className="upload-form__toolbar">
+              <button
+                type="button"
+                className="upload-clear-btn"
+                onClick={clearAllSelections}
+                aria-label="Remove selected solution ZIP, student ZIPs, and Excel file"
+              >
+                Clear selections
+              </button>
+            </div>
+          )}
 
           {error && (
             <div className="error-message" role="alert">

@@ -232,7 +232,7 @@ export default function FileProcessingModal({ open, progress, statusLine }) {
                 </p>
                 <p className="mt-2 text-xs text-slate-500">
                   {progress?.total > 0
-                    ? `Batch ${progress.current} of ${progress.total}`
+                    ? `Completed ${progress.current} of ${progress.total} project(s)`
                     : "Streaming validation events"}
                 </p>
               </div>

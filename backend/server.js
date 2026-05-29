@@ -643,6 +643,20 @@ function parseExcelForLinks(filePath) {
     return results;
 }
 
+/**
+ * Human-readable label for a multer student upload (never use disk random hex as the UI name).
+ * @param {*} file multer file object
+ * @param {number} index 0-based index in this request's student file list
+ */
+function studentUploadDisplayName(file, index) {
+    const raw = String(file.originalname || file.originalName || '').trim();
+    // Multer stores random hex on disk; broken multipart can surface that as "originalname".
+    const looksLikeDiskHash =
+        /^[a-f0-9]{8,64}$/i.test(raw) && !raw.includes('.');
+    if (raw && !looksLikeDiskHash) return raw;
+    return `student_${index + 1}.zip`;
+}
+
 // Helper: Generate Remarks based on score
 function getRemarks(score, status, errorMsg) {
     if (status === 'error') return `Error: ${errorMsg}`;
@@ -1655,8 +1669,8 @@ app.post('/compare', compareUpload, async (req, res) => {
         const studentTasks = [];
 
         // Add files
-        studentFiles.forEach(file => {
-            studentTasks.push({ type: 'file', path: file.path, name: file.originalname });
+        studentFiles.forEach((file, idx) => {
+            studentTasks.push({ type: 'file', path: file.path, name: studentUploadDisplayName(file, idx) });
         });
 
         // Add Excel links

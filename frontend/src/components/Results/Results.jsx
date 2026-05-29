@@ -12,7 +12,7 @@ const Results = ({ data }) => {
     return (
         <div className="results-container">
             <div className="batch-summary glass-panel">
-                <h2>Batch Analysis Results</h2>
+                <h2>React project batch results</h2>
                 <div className="overall-stats">
                     <div className="stat-card">
                         <span className="label">Total Projects</span>

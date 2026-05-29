@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import UploadForm from "../../components/UploadForm/UploadForm";
 import Results from "../../components/Results/Results";
 import "./Home.css";
@@ -8,10 +8,21 @@ const MAX_STUDENT_PROJECTS = 10;
 const getApiBaseUrl = () =>
   (import.meta.env.VITE_API_URL || "http://localhost:3000").replace(/\/$/, "");
 
+const DISK_HINT =
+  "Deletes backend/temp job folders and leftover uploads, and runs pm2 flush when available. Requires CLEANUP_DISK_SECRET on the API.";
+
+const DISK_REACT_HOST_NOTE =
+  "The React development team that owns this product is responsible for server capacity and disk hygiene on the environments they run. Set CLEANUP_DISK_SECRET in each API host’s backend .env so this cleanup can authenticate.";
+
 const Home = () => {
   const [results, setResults] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [cleanupBusy, setCleanupBusy] = useState(false);
+  /** Disk cleanup modal: form → loading → done (success or error). */
+  const [diskModalOpen, setDiskModalOpen] = useState(false);
+  const [diskPhase, setDiskPhase] = useState("idle"); // idle | form | loading | done
+  const [diskSecretInput, setDiskSecretInput] = useState("");
+  const [diskOutcome, setDiskOutcome] = useState(null); // { ok, summary? } | { ok: false, message }
   const [progress, setProgress] = useState({
     current: 0,
     total: 0,
@@ -37,9 +48,26 @@ const Home = () => {
     });
 
     const formData = new FormData();
-    formData.append("solution", solutionFile);
-    studentFiles.forEach((file) => formData.append("student", file));
-    if (excelFile) formData.append("studentExcel", excelFile);
+    // Third argument sets multipart filename so the API always receives originalname (avoids random hex-only names).
+    formData.append(
+      "solution",
+      solutionFile,
+      solutionFile.name || "solution.zip"
+    );
+    studentFiles.forEach((file, idx) => {
+      formData.append(
+        "student",
+        file,
+        file.name || `student_${idx + 1}.zip`
+      );
+    });
+    if (excelFile) {
+      formData.append(
+        "studentExcel",
+        excelFile,
+        excelFile.name || "students.xlsx"
+      );
+    }
 
     const baseUrl = getApiBaseUrl();
 
@@ -197,44 +225,152 @@ const Home = () => {
     }
   };
 
-  const handleServerDiskCleanup = async () => {
-    if (cleanupBusy || compareRunLocked) return;
+  const closeDiskModal = useCallback(() => {
+    setDiskModalOpen(false);
+    setDiskPhase("idle");
+    setDiskSecretInput("");
+    setDiskOutcome(null);
+  }, []);
+
+  useEffect(() => {
+    if (!diskModalOpen || diskPhase === "loading") return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") closeDiskModal();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [diskModalOpen, diskPhase, closeDiskModal]);
+
+  const runDiskCleanupRequest = async (secret) => {
     const baseUrl = getApiBaseUrl();
     const isNgrok =
       baseUrl.includes("ngrok-free.dev") || baseUrl.includes("ngrok.io");
 
-    let secret = (import.meta.env.VITE_CLEANUP_DISK_SECRET || "").trim();
-    if (!secret) {
-      secret = window.prompt(
-        "Enter server cleanup secret (same value as CLEANUP_DISK_SECRET in backend .env):"
-      );
+    const response = await fetch(`${baseUrl}/admin/cleanup-disk`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Cleanup-Secret": secret,
+        ...(isNgrok ? { "ngrok-skip-browser-warning": "true" } : {}),
+      },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || response.statusText || "Request failed");
     }
-    if (!secret) return;
+    return data.summary || {};
+  };
+
+  const submitDiskCleanup = async (secret) => {
+    const trimmed = (secret || "").trim();
+    if (!trimmed) return;
 
     setCleanupBusy(true);
+    setDiskModalOpen(true);
+    setDiskPhase("loading");
+    setDiskOutcome(null);
+
     try {
-      const response = await fetch(`${baseUrl}/admin/cleanup-disk`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Cleanup-Secret": secret,
-          ...(isNgrok ? { "ngrok-skip-browser-warning": "true" } : {}),
-        },
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data.error || response.statusText || "Request failed");
-      }
-      const s = data.summary || {};
-      alert(
-        `Server disk cleanup OK.\n• Temp job folders removed: ${s.tempEntriesRemoved ?? 0}\n• Stale upload files removed: ${s.uploadFilesRemoved ?? 0}\n• PM2 log flush: ${s.pm2Flush ?? "?"}`
-      );
+      const summary = await runDiskCleanupRequest(trimmed);
+      setDiskOutcome({ ok: true, summary });
+      setDiskPhase("done");
     } catch (e) {
-      alert(`Cleanup failed: ${e.message || e}`);
+      setDiskOutcome({
+        ok: false,
+        message: e?.message || String(e),
+      });
+      setDiskPhase("done");
     } finally {
       setCleanupBusy(false);
     }
   };
+
+  const handleDiskButtonClick = () => {
+    if (cleanupBusy || compareRunLocked) return;
+    const envSecret = (import.meta.env.VITE_CLEANUP_DISK_SECRET || "").trim();
+    if (envSecret) {
+      void submitDiskCleanup(envSecret);
+    } else {
+      setDiskSecretInput("");
+      setDiskOutcome(null);
+      setDiskPhase("form");
+      setDiskModalOpen(true);
+    }
+  };
+
+  const handleDiskModalSubmit = (e) => {
+    e.preventDefault();
+    void submitDiskCleanup(diskSecretInput);
+  };
+
+  const serverToolbar = (
+    <div className="home-chrome" role="toolbar" aria-label="Server utilities">
+      <span id="home-chrome-disk-desc" className="home-chrome__sr-only">
+        {compareRunLocked
+          ? "Free disk cleanup is unavailable while a compare is running."
+          : cleanupBusy
+            ? "Disk cleanup is in progress."
+            : `${DISK_HINT} ${DISK_REACT_HOST_NOTE}`}
+      </span>
+      <div className="home-chrome__disk-bundle">
+        <button
+          type="button"
+          className="home-chrome__disk"
+          onClick={handleDiskButtonClick}
+          disabled={compareRunLocked || cleanupBusy}
+          aria-describedby="home-chrome-disk-desc"
+        >
+          <span className="home-chrome__disk-icon" aria-hidden>
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <ellipse cx="12" cy="5" rx="9" ry="3" />
+              <path d="M3 5v6c0 1.7 4 3 9 3s9-1.3 9-3V5" />
+              <path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6" />
+            </svg>
+          </span>
+          <span className="home-chrome__disk-main">
+            <span className="home-chrome__disk-text">
+              {cleanupBusy ? "Cleaning…" : "Free disk"}
+            </span>
+            <span className="home-chrome__disk-sub">
+              <span className="home-chrome__disk-sub-label">React host</span>
+            </span>
+          </span>
+        </button>
+        <div className="home-chrome__tooltip" role="presentation">
+          {compareRunLocked ? (
+            <p className="home-chrome__tooltip-blocked">
+              Unavailable while a compare is running.
+            </p>
+          ) : cleanupBusy ? (
+            <p className="home-chrome__tooltip-blocked">Cleanup in progress…</p>
+          ) : (
+            <>
+              <p className="home-chrome__tooltip-kicker">Server disk cleanup</p>
+              <p className="home-chrome__tooltip-body">
+                Deletes{" "}
+                <code className="home-chrome__tooltip-code">backend/temp</code> job
+                folders and leftover uploads, and runs{" "}
+                <code className="home-chrome__tooltip-code">pm2 flush</code> when
+                available. Requires{" "}
+                <code className="home-chrome__tooltip-code">CLEANUP_DISK_SECRET</code>{" "}
+                on the API.
+              </p>
+              <p className="home-chrome__tooltip-aside">{DISK_REACT_HOST_NOTE}</p>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div
@@ -244,7 +380,7 @@ const Home = () => {
 
       {!results ? (
         <div className="landing-layout">
-          <div className="landing-heading-band">
+          <div className="landing-heading-band landing-heading-band--title-row">
             <h1 className="hero__title hero__title--landing-band">
               <span className="hero__title-line">
                 <span className="hero__title-accent">R</span>eact{" "}
@@ -252,6 +388,7 @@ const Home = () => {
                 <span className="hero__title-accent">V</span>alidator
               </span>
             </h1>
+            {serverToolbar}
           </div>
 
           <div className="landing-layout__intro">
@@ -292,58 +429,23 @@ const Home = () => {
                 progress={progress}
                 maxStudentProjects={MAX_STUDENT_PROJECTS}
               />
-              <div className="server-cleanup-panel">
-                <button
-                  type="button"
-                  className="server-cleanup-panel__btn"
-                  onClick={handleServerDiskCleanup}
-                  disabled={compareRunLocked || cleanupBusy}
-                  title={
-                    compareRunLocked
-                      ? "Unavailable while a compare is running"
-                      : undefined
-                  }
-                >
-                  {cleanupBusy ? "Cleaning…" : "Free server disk space"}
-                </button>
-                <p className="server-cleanup-panel__hint">
-                  Deletes <strong>backend/temp</strong> job folders and leftover{" "}
-                  <strong>uploads</strong>, and runs <strong>pm2 flush</strong> when
-                  available. Requires <code>CLEANUP_DISK_SECRET</code> on the API. The button
-                  is disabled while a compare is running.
-                </p>
-              </div>
             </main>
           </div>
         </div>
       ) : (
         <>
-          <header className="hero hero--compact">
+          <header className="hero hero--compact home-results-heading landing-heading-band--title-row">
             <h1 className="hero__title hero__title--compact">
               <span className="hero__title-accent">R</span>eact{" "}
               <span className="hero__title-accent">U</span>I{" "}
               <span className="hero__title-accent">V</span>alidator
             </h1>
+            {serverToolbar}
           </header>
 
-          <main className="main-content">
+          <main className="main-content main-content--results">
             <div className="results-wrapper">
               <Results data={results} />
-              <div className="server-cleanup-panel server-cleanup-panel--inline">
-                <button
-                  type="button"
-                  className="server-cleanup-panel__btn"
-                  onClick={handleServerDiskCleanup}
-                  disabled={compareRunLocked || cleanupBusy}
-                  title={
-                    compareRunLocked
-                      ? "Unavailable while a compare is running"
-                      : undefined
-                  }
-                >
-                  {cleanupBusy ? "Cleaning…" : "Free server disk space"}
-                </button>
-              </div>
               <button className="reset-btn" onClick={() => setResults(null)}>
                 Upload New Project
               </button>
@@ -351,6 +453,120 @@ const Home = () => {
           </main>
         </>
       )}
+
+      {diskModalOpen ? (
+        <div
+          className="disk-modal-overlay"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && diskPhase !== "loading") {
+              closeDiskModal();
+            }
+          }}
+        >
+          <div
+            className="disk-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="disk-modal-title"
+          >
+            {diskPhase === "form" ? (
+              <form onSubmit={handleDiskModalSubmit}>
+                <h2 id="disk-modal-title" className="disk-modal__title">
+                  Server cleanup key
+                </h2>
+                <p className="disk-modal__lead">
+                  Enter the same value as{" "}
+                  <code className="disk-modal__code">CLEANUP_DISK_SECRET</code> in
+                  the API backend <code className="disk-modal__code">.env</code>.
+                </p>
+                <label className="disk-modal__label" htmlFor="disk-modal-secret">
+                  Secret
+                </label>
+                <input
+                  id="disk-modal-secret"
+                  className="disk-modal__input"
+                  type="password"
+                  autoComplete="off"
+                  value={diskSecretInput}
+                  onChange={(e) => setDiskSecretInput(e.target.value)}
+                  placeholder="Cleanup secret"
+                />
+                <div className="disk-modal__actions">
+                  <button
+                    type="button"
+                    className="disk-modal__btn disk-modal__btn--ghost"
+                    onClick={closeDiskModal}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="disk-modal__btn disk-modal__btn--primary"
+                    disabled={!diskSecretInput.trim()}
+                  >
+                    Run cleanup
+                  </button>
+                </div>
+              </form>
+            ) : null}
+
+            {diskPhase === "loading" ? (
+              <div className="disk-modal__loading">
+                <h2 id="disk-modal-title" className="disk-modal__title">
+                  Running cleanup…
+                </h2>
+                <p className="disk-modal__lead">
+                  Contacting the API and clearing temp data. This may take a few
+                  seconds.
+                </p>
+                <div className="disk-modal__spinner" aria-hidden />
+              </div>
+            ) : null}
+
+            {diskPhase === "done" && diskOutcome ? (
+              <div>
+                <h2 id="disk-modal-title" className="disk-modal__title">
+                  {diskOutcome.ok ? "Cleanup complete" : "Cleanup failed"}
+                </h2>
+                {diskOutcome.ok ? (
+                  <ul className="disk-modal__summary">
+                    <li>
+                      Temp job folders removed:{" "}
+                      <strong>
+                        {diskOutcome.summary?.tempEntriesRemoved ?? 0}
+                      </strong>
+                    </li>
+                    <li>
+                      Stale upload files removed:{" "}
+                      <strong>
+                        {diskOutcome.summary?.uploadFilesRemoved ?? 0}
+                      </strong>
+                    </li>
+                    <li>
+                      PM2 log flush:{" "}
+                      <strong>{String(diskOutcome.summary?.pm2Flush ?? "?")}</strong>
+                    </li>
+                  </ul>
+                ) : (
+                  <p className="disk-modal__error" role="alert">
+                    {diskOutcome.message}
+                  </p>
+                )}
+                <div className="disk-modal__actions disk-modal__actions--single">
+                  <button
+                    type="button"
+                    className="disk-modal__btn disk-modal__btn--primary"
+                    onClick={closeDiskModal}
+                  >
+                    OK
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

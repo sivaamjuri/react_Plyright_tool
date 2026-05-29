@@ -479,3 +479,41 @@
     transform: translateY(0);
   }
 }
+
+/* Slim reset row — clears solution, student ZIPs, and Excel from local picker state */
+.upload-form__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0.35rem clamp(1.05rem, 2.6vw, 1.5rem) 0.55rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.upload-clear-btn {
+  margin: 0;
+  padding: 0.28rem 0.65rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.95);
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.upload-clear-btn:hover {
+  color: #e2e8f0;
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.08);
+}
+
+.upload-clear-btn:focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.55);
+  outline-offset: 2px;
+}
