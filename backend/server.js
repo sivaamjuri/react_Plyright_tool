@@ -680,16 +680,37 @@ async function findProjectRoot(baseDir, depth = 0) {
     }
     if (depth > 5) return null; // Prevent infinite depth
 
-    // Check current level
-    if (await fs.pathExists(path.join(baseDir, 'package.json'))) return { path: baseDir, type: 'react' };
-    if (await fs.pathExists(path.join(baseDir, 'index.html'))) return { path: baseDir, type: 'static' };
+    const pkgPath = path.join(baseDir, 'package.json');
+    const indexPath = path.join(baseDir, 'index.html');
+    const hasPkg = await fs.pathExists(pkgPath);
+    const hasIndex = await fs.pathExists(indexPath);
 
-    // Scan all subdirectories
-    const items = await fs.readdir(baseDir, { withFileTypes: true });
-    const dirs = items.filter(item => item.isDirectory() &&
-        item.name !== 'node_modules' &&
-        item.name !== '.git' &&
-        item.name !== 'dist');
+    const items = await fs.readdir(baseDir, { withFileTypes: true }).catch(() => []);
+    const dirs = items.filter(
+        (item) =>
+            item.isDirectory() &&
+            item.name !== 'node_modules' &&
+            item.name !== '.git' &&
+            item.name !== 'dist'
+    );
+
+    if (hasPkg) {
+        const scripts = await readPackageJsonScripts(baseDir);
+        if (packageJsonHasRunnableDevScript(scripts)) {
+            return { path: baseDir, type: 'react' };
+        }
+        // Root has package.json but no dev/start/serve — common when the real app lives in a subfolder (e.g. assignment/).
+        for (const dir of dirs) {
+            const subDir = path.join(baseDir, dir.name);
+            const nested = await findProjectRoot(subDir, depth + 1);
+            if (nested) return nested;
+        }
+        return { path: baseDir, type: 'react' };
+    }
+
+    if (hasIndex) {
+        return { path: baseDir, type: 'static' };
+    }
 
     for (const dir of dirs) {
         const subDir = path.join(baseDir, dir.name);
@@ -737,6 +758,19 @@ function pickNpmDevScript(scripts) {
         if (typeof body === 'string' && body.trim()) return name;
     }
     return null;
+}
+
+async function readPackageJsonScripts(projectDir) {
+    try {
+        const pkg = await fs.readJson(path.join(projectDir, 'package.json'));
+        return pkg && typeof pkg === 'object' ? pkg.scripts : null;
+    } catch {
+        return null;
+    }
+}
+
+function packageJsonHasRunnableDevScript(scripts) {
+    return pickNpmDevScript(scripts) != null;
 }
 
 /**
