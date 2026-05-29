@@ -346,3 +346,56 @@
     display: none;
   }
 }
+
+/* Server disk cleanup (admin) */
+.server-cleanup-panel {
+  width: 100%;
+  max-width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.45);
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.server-cleanup-panel--inline {
+  margin-top: 0;
+  padding: 0.5rem 0.65rem;
+}
+
+.server-cleanup-panel__btn {
+  width: 100%;
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  background: rgba(251, 191, 36, 0.12);
+  color: #fde68a;
+  font-weight: 600;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.server-cleanup-panel__btn:hover:not(:disabled) {
+  background: rgba(251, 191, 36, 0.22);
+  border-color: #fbbf24;
+}
+
+.server-cleanup-panel__btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.server-cleanup-panel__hint {
+  margin: 0.55rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.server-cleanup-panel__hint code {
+  font-size: 0.68rem;
+  color: #a5f3fc;
+}

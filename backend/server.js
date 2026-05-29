@@ -8,6 +8,8 @@ const { chromium } = require('playwright');
 const pixelmatch = require('pixelmatch');
 const { PNG } = require('pngjs');
 const { spawn, exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 const axios = require('axios');
 const { performance } = require('perf_hooks');
 const ExcelJS = require('exceljs');
@@ -198,7 +200,7 @@ app.use(cors({
         return callback(new Error(`CORS blocked for origin: ${origin}`));
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning', 'X-Cleanup-Secret'],
     preflightContinue: false,
     optionsSuccessStatus: 204
 }));
@@ -231,6 +233,63 @@ app.use((req, res, next) => {
 app.get('/health', (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json({ ok: true, uptimeSec: Math.round(process.uptime()) });
+});
+
+/**
+ * Wipes backend/temp and backend/uploads and tries `pm2 flush`. Guarded by CLEANUP_DISK_SECRET (header X-Cleanup-Secret or Authorization: Bearer).
+ * Do not call while a compare is running.
+ */
+app.post('/admin/cleanup-disk', async (req, res) => {
+    const secret = (process.env.CLEANUP_DISK_SECRET || '').trim();
+    if (!secret || secret.length < 8) {
+        return res.status(503).json({
+            error: 'Disk cleanup API is disabled. Set CLEANUP_DISK_SECRET (min 8 chars) in backend/.env and restart the server.',
+        });
+    }
+    const headerSecret = (req.get('X-Cleanup-Secret') || '').trim();
+    const auth = req.get('Authorization') || '';
+    const m = /^Bearer\s+(.+)$/i.exec(auth);
+    const bearerSecret = (m && m[1] ? m[1].trim() : '');
+    const provided = headerSecret || bearerSecret;
+    if (provided !== secret) {
+        return res.status(403).json({ error: 'Invalid or missing cleanup secret.' });
+    }
+
+    const summary = { tempEntriesRemoved: 0, uploadFilesRemoved: 0, pm2Flush: 'skipped' };
+
+    try {
+        const tempNames = await fsp.readdir(TEMP_DIR);
+        for (const name of tempNames) {
+            await fs.remove(path.join(TEMP_DIR, name));
+            summary.tempEntriesRemoved++;
+        }
+    } catch (e) {
+        log(`[Admin cleanup] temp error: ${e.message}`);
+        return res.status(500).json({ error: `Failed to clean temp: ${e.message}` });
+    }
+
+    try {
+        const uploadNames = await fsp.readdir(UPLOADS_DIR);
+        for (const name of uploadNames) {
+            await fsp.unlink(path.join(UPLOADS_DIR, name)).catch(() => {});
+            summary.uploadFilesRemoved++;
+        }
+    } catch (e) {
+        log(`[Admin cleanup] uploads error: ${e.message}`);
+        return res.status(500).json({ error: `Failed to clean uploads: ${e.message}` });
+    }
+
+    try {
+        await execAsync('pm2 flush', { timeout: 60000, env: process.env });
+        summary.pm2Flush = 'ok';
+    } catch (e) {
+        summary.pm2Flush = `unavailable: ${e.message || 'pm2 not in path'}`;
+    }
+
+    log(
+        `[Admin cleanup] temp removed=${summary.tempEntriesRemoved} uploads=${summary.uploadFilesRemoved} pm2=${summary.pm2Flush}`
+    );
+    res.json({ ok: true, summary });
 });
 
 // Setup directories
@@ -1100,6 +1159,12 @@ function startServer(projectInfo, port) {
                     env.NODE_OPTIONS = `--openssl-legacy-provider --max-old-space-size=${heapMb}`;
                 }
 
+                // Fewer native file watchers (helps EMFILE on small EC2 ulimit). Set UI_SIM_CHOKIDAR_POLLING=0 to disable.
+                if (process.env.UI_SIM_CHOKIDAR_POLLING !== '0' && process.env.UI_SIM_CHOKIDAR_POLLING !== 'false') {
+                    env.CHOKIDAR_USEPOLLING = '1';
+                    env.WATCHPACK_POLLING = 'true';
+                }
+
                 const args = ['run', cmd];
                 if (npmScriptNeedsPortFlag(scripts[cmd], cmd)) {
                     args.push('--', '--port', port.toString(), '--host', '127.0.0.1');
@@ -1638,6 +1703,8 @@ app.post('/compare', compareUpload, async (req, res) => {
 
         // 3. Process Students in Batches
         const allResults = [];
+        /** Dedupe reference PNG uploads to Supabase Storage (one signed URL per fileName per run). */
+        const solutionStorageUrlCache = Object.create(null);
         const BATCH_SIZE = 1; // SAFE MODE: Only 1 at a time for AWS Free Tier/Small servers!
 
         sendProgress({ type: 'start', total: studentTasks.length });
@@ -1859,6 +1926,23 @@ app.post('/compare', compareUpload, async (req, res) => {
                     }
                     tCompare = performance.now() - t2;
 
+                    let pageResultsForResponse = pageResults;
+                    try {
+                        const supa = require('./lib/supabaseStorage');
+                        if (supa.isEnabled()) {
+                            pageResultsForResponse = await supa.uploadComparePageArtifacts({
+                                runId,
+                                stuId,
+                                routes,
+                                pageResults,
+                                solutionUrlCache: solutionStorageUrlCache,
+                            });
+                            log(`[Supabase] Stored compare images for ${stuId} (omit_base64=${supa.omitBase64()})`);
+                        }
+                    } catch (supErr) {
+                        log(`[Supabase] Upload skipped/failed: ${supErr.message}`);
+                    }
+
                     let finalOverall = (totalScore / routes.length);
                     finalOverall = Math.max(0, Math.min(100, finalOverall));
 
@@ -1881,7 +1965,7 @@ app.post('/compare', compareUpload, async (req, res) => {
                         status: 'success',
                         overallScore: scoreNum,
                         remarks: getRemarks(scoreNum, 'success'),
-                        pages: pageResults,
+                        pages: pageResultsForResponse,
                         timings: {
                             unzip: (tUnzip / 1000).toFixed(2) + 's',
                             setup: (tSetup / 1000).toFixed(2) + 's',

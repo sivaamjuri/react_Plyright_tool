@@ -52,32 +52,42 @@ cd master_project
 npm install --no-audit --no-fund --legacy-peer-deps
 cd "$BACKEND"
 
+PLAYWRIGHT_LINE=""
 if [[ -n "${PLAYWRIGHT_HOST_PLATFORM_OVERRIDE:-}" ]]; then
-  cat > "$REPO_ROOT/deploy/pm2.ecosystem.cjs" <<EOF
+  PLAYWRIGHT_LINE="      PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu24.04-x64',"
+fi
+cat > "$REPO_ROOT/deploy/pm2.ecosystem.cjs" <<EOF
 module.exports = {
   apps: [{
     name: 'ui-similarity-api',
     cwd: '$BACKEND',
     script: 'server.js',
-    env: { PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: 'ubuntu24.04-x64' },
+    env: {
+      UI_SIM_CHOKIDAR_POLLING: '1',
+$PLAYWRIGHT_LINE
+    },
   }],
 };
 EOF
-  echo "=== Wrote $REPO_ROOT/deploy/pm2.ecosystem.cjs (Playwright override for PM2) ==="
-fi
+echo "=== Wrote $REPO_ROOT/deploy/pm2.ecosystem.cjs (PM2 env: polling watcher + optional Playwright) ==="
 
 echo "=== Install PM2 globally (optional) ==="
 if ! command -v pm2 &>/dev/null; then
   sudo npm install -g pm2
 fi
 
+BOOT_USER="${SUDO_USER:-$(id -un)}"
+echo "=== Server tuning (nofile limits, PM2 systemd drop-in, daily temp cleanup) ==="
+if [[ "$(id -u)" -eq 0 ]]; then
+  bash "$SCRIPT_DIR/ec2-server-tuning.sh" --repo-root "$REPO_ROOT" --user "$BOOT_USER" || echo "WARN: ec2-server-tuning.sh failed — fix errors then: sudo bash deploy/ec2-server-tuning.sh --repo-root $REPO_ROOT --user $BOOT_USER"
+else
+  sudo bash "$SCRIPT_DIR/ec2-server-tuning.sh" --repo-root "$REPO_ROOT" --user "$BOOT_USER" || echo "WARN: ec2-server-tuning.sh failed — free disk if ENOSPC, then re-run with sudo"
+fi
+
 echo ""
 echo "[DONE] Next steps (you run manually):"
 echo "  1. nano $BACKEND/.env   # set CORS_ORIGINS=https://YOUR-APP.vercel.app,http://localhost:5173"
-if [[ -n "${PLAYWRIGHT_HOST_PLATFORM_OVERRIDE:-}" ]]; then
-  echo "  2. pm2 start $REPO_ROOT/deploy/pm2.ecosystem.cjs   # required on Ubuntu 26.x (Playwright host override)"
-else
-  echo "  2. cd $BACKEND && pm2 start server.js --name ui-similarity-api"
-fi
-echo "  3. pm2 save && pm2 startup  # follow the printed sudo command"
-echo "  4. On Vercel: root=frontend, env VITE_API_URL=http://THIS_SERVER_IP:3000"
+echo "  2. pm2 start $REPO_ROOT/deploy/pm2.ecosystem.cjs   # recommended (Chokidar polling + Ubuntu 26 Playwright env when set)"
+echo "  3. pm2 save && pm2 startup  # follow the printed sudo command, then: sudo systemctl daemon-reload && sudo systemctl restart pm2-${BOOT_USER}.service"
+echo "  4. Reboot once if ulimit -n is still 1024: sudo reboot"
+echo "  5. On Vercel: root=frontend, env VITE_API_URL=http://THIS_SERVER_IP:3000"

@@ -5,9 +5,13 @@ import "./Home.css";
 
 const MAX_STUDENT_PROJECTS = 10;
 
+const getApiBaseUrl = () =>
+  (import.meta.env.VITE_API_URL || "http://localhost:3000").replace(/\/$/, "");
+
 const Home = () => {
   const [results, setResults] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
   const [progress, setProgress] = useState({
     current: 0,
     total: 0,
@@ -16,6 +20,9 @@ const Home = () => {
     completedStudents: [],
     pipelineEvents: [],
   });
+
+  /** True for the whole /compare request (including after `result` until the stream closes). */
+  const compareRunLocked = isLoading;
 
   const handleAnalyze = async (solutionFile, studentFiles, excelFile) => {
     setIsLoading(true);
@@ -34,9 +41,7 @@ const Home = () => {
     studentFiles.forEach((file) => formData.append("student", file));
     if (excelFile) formData.append("studentExcel", excelFile);
 
-    const baseUrl = (
-      import.meta.env.VITE_API_URL || "http://localhost:3000"
-    ).replace(/\/$/, "");
+    const baseUrl = getApiBaseUrl();
 
     try {
       const isNgrok =
@@ -192,6 +197,45 @@ const Home = () => {
     }
   };
 
+  const handleServerDiskCleanup = async () => {
+    if (cleanupBusy || compareRunLocked) return;
+    const baseUrl = getApiBaseUrl();
+    const isNgrok =
+      baseUrl.includes("ngrok-free.dev") || baseUrl.includes("ngrok.io");
+
+    let secret = (import.meta.env.VITE_CLEANUP_DISK_SECRET || "").trim();
+    if (!secret) {
+      secret = window.prompt(
+        "Enter server cleanup secret (same value as CLEANUP_DISK_SECRET in backend .env):"
+      );
+    }
+    if (!secret) return;
+
+    setCleanupBusy(true);
+    try {
+      const response = await fetch(`${baseUrl}/admin/cleanup-disk`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Cleanup-Secret": secret,
+          ...(isNgrok ? { "ngrok-skip-browser-warning": "true" } : {}),
+        },
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.error || response.statusText || "Request failed");
+      }
+      const s = data.summary || {};
+      alert(
+        `Server disk cleanup OK.\n• Temp job folders removed: ${s.tempEntriesRemoved ?? 0}\n• Stale upload files removed: ${s.uploadFilesRemoved ?? 0}\n• PM2 log flush: ${s.pm2Flush ?? "?"}`
+      );
+    } catch (e) {
+      alert(`Cleanup failed: ${e.message || e}`);
+    } finally {
+      setCleanupBusy(false);
+    }
+  };
+
   return (
     <div
       className={`home-container${!results ? " home-container--landing" : ""}`}
@@ -248,6 +292,27 @@ const Home = () => {
                 progress={progress}
                 maxStudentProjects={MAX_STUDENT_PROJECTS}
               />
+              <div className="server-cleanup-panel">
+                <button
+                  type="button"
+                  className="server-cleanup-panel__btn"
+                  onClick={handleServerDiskCleanup}
+                  disabled={compareRunLocked || cleanupBusy}
+                  title={
+                    compareRunLocked
+                      ? "Unavailable while a compare is running"
+                      : undefined
+                  }
+                >
+                  {cleanupBusy ? "Cleaning…" : "Free server disk space"}
+                </button>
+                <p className="server-cleanup-panel__hint">
+                  Deletes <strong>backend/temp</strong> job folders and leftover{" "}
+                  <strong>uploads</strong>, and runs <strong>pm2 flush</strong> when
+                  available. Requires <code>CLEANUP_DISK_SECRET</code> on the API. The button
+                  is disabled while a compare is running.
+                </p>
+              </div>
             </main>
           </div>
         </div>
@@ -264,6 +329,21 @@ const Home = () => {
           <main className="main-content">
             <div className="results-wrapper">
               <Results data={results} />
+              <div className="server-cleanup-panel server-cleanup-panel--inline">
+                <button
+                  type="button"
+                  className="server-cleanup-panel__btn"
+                  onClick={handleServerDiskCleanup}
+                  disabled={compareRunLocked || cleanupBusy}
+                  title={
+                    compareRunLocked
+                      ? "Unavailable while a compare is running"
+                      : undefined
+                  }
+                >
+                  {cleanupBusy ? "Cleaning…" : "Free server disk space"}
+                </button>
+              </div>
               <button className="reset-btn" onClick={() => setResults(null)}>
                 Upload New Project
               </button>
