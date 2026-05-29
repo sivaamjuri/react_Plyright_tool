@@ -138,10 +138,12 @@ function enqueueNpmInstallSerialized(fn) {
     return run;
 }
 
+const normalizeOrigin = (s) => String(s || '').trim().replace(/\/+$/, '');
+
 const parseAllowedOrigins = () => {
     const raw = process.env.CORS_ORIGINS;
     if (!raw) return ['http://localhost:5173'];
-    return raw.split(',').map((origin) => origin.trim()).filter(Boolean);
+    return raw.split(',').map((origin) => normalizeOrigin(origin)).filter(Boolean);
 };
 
 const ALLOWED_ORIGINS = parseAllowedOrigins();
@@ -196,7 +198,8 @@ app.use(cors({
     origin(origin, callback) {
         // Allow non-browser requests (no Origin header)
         if (!origin) return callback(null, true);
-        if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+        const o = normalizeOrigin(origin);
+        if (ALLOWED_ORIGINS.includes(o)) return callback(null, true);
         return callback(new Error(`CORS blocked for origin: ${origin}`));
     },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
@@ -210,6 +213,7 @@ app.options(/.*/, cors());
 
 const server = app.listen(PORT, '0.0.0.0', () => {
     log(`Server running on http://localhost:${PORT} (max ${MAX_UPLOAD_MB}MB/file; dev probe ${SERVER_READY_TIMEOUT_MS}ms / ${SERVER_READY_MAX_WAIT_SEC}s; Playwright goto ${PLAYWRIGHT_GOTO_TIMEOUT_MS}ms)`);
+    log(`CORS allowed origins (${ALLOWED_ORIGINS.length}): ${ALLOWED_ORIGINS.join(' | ')}`);
 });
 
 // Increase timeout to 2 hours
@@ -1579,6 +1583,7 @@ app.post('/compare', compareUpload, async (req, res) => {
     const runId = Date.now().toString();
     const runDir = path.join(TEMP_DIR, runId);
     const solExtractDir = path.join(runDir, 'solution_raw');
+    log(`POST /compare runId=${runId} (temp ${runDir})`);
 
     // Performance tracking
     const startOverall = performance.now();
@@ -1989,14 +1994,14 @@ app.post('/compare', compareUpload, async (req, res) => {
                         }
                     };
                 } catch (err) {
-                    log(`Failed to process ${task.name}: ${err.message}`);
+                    log(`Skipped ${task.name} (this project only; queue continues): ${err.message}`);
                     sendProgress({
                         type: 'pipeline',
                         projectIndex: projectNum,
                         projectTotal,
                         studentName: task.name,
                         phase: 'error',
-                        message: `Stopped: ${err.message}`
+                        message: `Skipped — ${err.message} (only this project). Next in queue…`
                     });
                     return {
                         studentName: task.name,
@@ -2034,6 +2039,17 @@ app.post('/compare', compareUpload, async (req, res) => {
                     remarks: res.remarks
                 });
             });
+
+            const remainingAfterBatch = studentTasks.length - (i + BATCH_SIZE);
+            if (remainingAfterBatch > 0) {
+                const hadError = batchResults.some((r) => r.status === 'error');
+                if (hadError) {
+                    sendProgress({
+                        type: 'status',
+                        message: `${remainingAfterBatch} project(s) still queued after skip/fail — continuing with the next…`,
+                    });
+                }
+            }
         }
 
         const overallTime = ((performance.now() - startOverall) / 1000).toFixed(2) + 's';
