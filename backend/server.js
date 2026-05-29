@@ -1197,7 +1197,7 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
 
 // Helper: Capture Screenshots
 // onRouteProgress: optional ({ kind: 'start'|'done', route, pageLabel, fileName, ok?, error? }) => void
-async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = null, onRouteProgress = null) {
+async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = null, onRouteProgress = null, devServerLogPath = null) {
     await fs.ensureDir(outputDir);
     const ownBrowser = !sharedBrowser;
     const browser = sharedBrowser || await chromium.launch();
@@ -1209,6 +1209,22 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
         const fileName = route === '/' ? 'index.png' : `${route.replace(/\//g, '')}.png`;
         const pageLabel = route === '/' ? 'Home Page' : route;
         const savePath = path.join(outputDir, fileName);
+
+        // Listen for console and page errors
+        const pageErrors = [];
+        const consoleErrors = [];
+
+        const handlePageError = (err) => {
+            pageErrors.push(err.message || String(err));
+        };
+        const handleConsole = (msg) => {
+            if (msg.type() === 'error') {
+                consoleErrors.push(msg.text());
+            }
+        };
+
+        page.on('pageerror', handlePageError);
+        page.on('console', handleConsole);
 
         try {
             if (onRouteProgress) {
@@ -1224,15 +1240,110 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
             // Small settle delay for dynamic layout without adding too much latency
             await page.waitForTimeout(300);
 
+            // Check for blank page or compilation error overlays
+            const pageCheck = await page.evaluate(() => {
+                // Check if Vite error overlay exists
+                const hasViteOverlay = !!document.querySelector('vite-error-overlay') || 
+                                       !!document.querySelector('#vite-error-overlay') ||
+                                       !!document.body.innerHTML.includes('vite-error-overlay');
+                
+                // Check if webpack error overlay exists
+                const hasWebpackOverlay = !!document.querySelector('.webpack-hot-middleware-error-overlay') ||
+                                         !!document.querySelector('iframe[src*="webpack"]') ||
+                                         !!document.getElementById('webpack-dev-server-client-overlay');
+
+                // Check shadow DOM overlays
+                let hasShadowOverlay = false;
+                try {
+                    const allElements = Array.from(document.querySelectorAll('*'));
+                    for (const el of allElements) {
+                        if (el.shadowRoot) {
+                            const html = el.shadowRoot.innerHTML || '';
+                            if (html.includes('overlay') && (html.includes('error') || html.includes('fail') || html.includes('compile'))) {
+                                hasShadowOverlay = true;
+                                break;
+                            }
+                        }
+                    }
+                } catch (e) {}
+
+                // Check if the app is blank
+                const rootEl = document.getElementById('root') || document.getElementById('app');
+                let isBlank = false;
+                if (rootEl) {
+                    isBlank = rootEl.innerHTML.trim() === '';
+                } else {
+                    const bodyChildren = Array.from(document.body.children).filter(el => {
+                        const tag = el.tagName.toLowerCase();
+                        return tag !== 'script' && tag !== 'noscript' && tag !== 'style';
+                    });
+                    isBlank = bodyChildren.length === 0 || document.body.innerText.trim() === '';
+                }
+
+                return {
+                    hasViteOverlay,
+                    hasWebpackOverlay,
+                    hasShadowOverlay,
+                    isBlank
+                };
+            });
+
+            // Clean up event listeners for this route
+            page.off('pageerror', handlePageError);
+            page.off('console', handleConsole);
+
+            const hasError = pageCheck.hasViteOverlay || 
+                             pageCheck.hasWebpackOverlay || 
+                             pageCheck.hasShadowOverlay || 
+                             pageCheck.isBlank;
+
+            if (hasError) {
+                let errorDetails = '';
+                if (pageCheck.hasViteOverlay || pageCheck.hasWebpackOverlay || pageCheck.hasShadowOverlay) {
+                    errorDetails += `An error/compilation overlay was detected on the page. The application failed to compile or run.\n`;
+                } else if (pageCheck.isBlank) {
+                    errorDetails += `The application rendered a completely blank page (no root content found).\n`;
+                }
+
+                if (pageErrors.length > 0) {
+                    errorDetails += `\nUncaught JavaScript Exceptions:\n- ${pageErrors.join('\n- ')}\n`;
+                }
+                if (consoleErrors.length > 0) {
+                    const firstFew = consoleErrors.slice(0, 5);
+                    errorDetails += `\nConsole Errors:\n- ${firstFew.join('\n- ')}\n`;
+                }
+
+                // If devServerLogPath is provided, read its tail to get compilation errors
+                if (devServerLogPath && fs.existsSync(devServerLogPath)) {
+                    try {
+                        const logContent = fs.readFileSync(devServerLogPath, 'utf8');
+                        const lines = logContent.split('\n');
+                        const relevantLines = lines.slice(-30).join('\n').trim();
+                        if (relevantLines) {
+                            errorDetails += `\nDev Server Compile Log:\n${relevantLines}`;
+                        }
+                    } catch (logErr) {
+                        errorDetails += `\n(Could not read dev-server.log: ${logErr.message})`;
+                    }
+                }
+
+                throw new Error(errorDetails.trim());
+            }
+
             await page.screenshot({ path: savePath, fullPage: true });
             if (onRouteProgress) {
                 onRouteProgress({ kind: 'done', route, pageLabel, fileName, ok: true });
             }
         } catch (e) {
+            // Ensure listeners are unregistered in case of navigation timeout
+            page.off('pageerror', handlePageError);
+            page.off('console', handleConsole);
+
             log(`Failed to capture ${url}: ${e.message}`);
             if (onRouteProgress) {
                 onRouteProgress({ kind: 'done', route, pageLabel, fileName, ok: false, error: e.message });
             }
+            throw e; // Propagate the error so the compare process fails gracefully with details
         }
     }
 
@@ -1391,6 +1502,8 @@ app.post('/compare', compareUpload, async (req, res) => {
 
         sendProgress({ type: 'status', message: 'Capturing Solution Screenshots...' });
         const routes = ['/'];
+        const solLogName = solRoot.type === 'static' ? 'static-server.log' : 'dev-server.log';
+        const solLogPath = path.join(solRoot.path, solLogName);
         await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir, sharedBrowser, (evt) => {
             if (evt.kind === 'start') {
                 sendProgress({
@@ -1423,7 +1536,7 @@ app.post('/compare', compareUpload, async (req, res) => {
                     message: `Screenshot failed — ${evt.fileName}: ${evt.error || 'unknown error'}`
                 });
             }
-        });
+        }, solLogPath);
 
         // FREE UP RAM FOR AWS t3.micro: Kill the solution server immediately after screenshots!
         if (solServer?.process) {
@@ -1615,6 +1728,9 @@ app.post('/compare', compareUpload, async (req, res) => {
                         message: 'Taking UI screenshots (Playwright)…'
                     });
 
+                    const logName = stuProjectRoot.type === 'static' ? 'static-server.log' : 'dev-server.log';
+                    const stuLogPath = path.join(stuProjectRoot.path, logName);
+
                     const t1 = performance.now();
                     await captureScreenshots(stuServer.baseUrl, routes, stuScreenshotDir, sharedBrowser, (evt) => {
                         if (evt.kind === 'start') {
@@ -1645,7 +1761,7 @@ app.post('/compare', compareUpload, async (req, res) => {
                                 message: `Screenshot failed — ${evt.fileName}: ${evt.error || 'unknown error'}`
                             });
                         }
-                    });
+                    }, stuLogPath);
                     tScreenshot = performance.now() - t1;
 
                     sendProgress({

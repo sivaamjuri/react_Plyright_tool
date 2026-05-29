@@ -373,6 +373,22 @@
     margin-bottom: 0.5rem;
 }
 
+.error-box p {
+    white-space: pre-wrap;
+    font-family: 'Consolas', 'Monaco', monospace;
+    text-align: left;
+    background: rgba(15, 16, 33, 0.6);
+    padding: 1.5rem;
+    border-radius: 8px;
+    margin-top: 1.5rem;
+    font-size: 0.9rem;
+    max-height: 400px;
+    overflow-y: auto;
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    color: #fca5a5;
+    line-height: 1.55;
+}
+
 @media (max-width: 1000px) {
     .results-container {
         flex-direction: column;
