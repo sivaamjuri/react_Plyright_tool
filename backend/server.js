@@ -278,7 +278,11 @@ function compareUpload(req, res, next) {
 
 // Helper: Kill Process Safely
 function killProcess(proc) {
-    if (!proc || !proc.pid) return;
+    if (!proc) return;
+    if (proc.dbProcess) {
+        killProcess(proc.dbProcess);
+    }
+    if (!proc.pid) return;
     try {
         if (os.platform() === 'win32') {
             const killer = spawn("taskkill", ["/pid", proc.pid.toString(), '/f', '/t'], { shell: true });
@@ -1002,11 +1006,11 @@ function startServer(projectInfo, port) {
                 // NEW: Start json-server if db.json or server.js exists
                 const dbPath = path.join(projectDir, 'db.json');
                 const customServerPath = path.join(projectDir, 'server.js');
+                let jsProc;
                 if (await fs.pathExists(dbPath)) {
                     log(`[${port}] Starting mockup backend on port 8000...`);
                     const jsLogStream = fs.createWriteStream(path.join(projectDir, 'json-server.log'), { flags: 'a' });
 
-                    let jsProc;
                     if (await fs.pathExists(customServerPath)) {
                         // Run the custom server.js if it exists
                         jsProc = spawn('node', ['server.js'], {
@@ -1028,6 +1032,18 @@ function startServer(projectInfo, port) {
                 }
 
                 await ensureMasterNativeTooling(port);
+
+                // Clear Vite pre-bundling cache (.vite) in the project's node_modules
+                // to prevent path/metadata conflicts between solution and student runs.
+                try {
+                    const viteCache = path.join(projectDir, 'node_modules', '.vite');
+                    if (await fs.pathExists(viteCache)) {
+                        await fs.remove(viteCache);
+                        log(`[${port}] Cleared pre-bundled Vite cache at ${viteCache}`);
+                    }
+                } catch (cacheErr) {
+                    log(`[${port}] Failed to clear Vite cache: ${cacheErr.message}`);
+                }
 
                 log(`[${port}] Starting server...`);
                 const logPath = path.join(projectDir, 'dev-server.log');
@@ -1094,6 +1110,7 @@ function startServer(projectInfo, port) {
                     shell: true,
                     env: env
                 });
+                serverProc.dbProcess = jsProc;
 
                 serverProc.stdout.on('data', (data) => logStream.write(data));
                 serverProc.stderr.on('data', (data) => logStream.write(data));
@@ -1213,6 +1230,7 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
         // Listen for console and page errors
         const pageErrors = [];
         const consoleErrors = [];
+        const failedRequests = [];
 
         const handlePageError = (err) => {
             pageErrors.push(err.message || String(err));
@@ -1222,9 +1240,19 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
                 consoleErrors.push(msg.text());
             }
         };
+        const handleResponse = (response) => {
+            if (response.status() >= 400) {
+                failedRequests.push(`${response.status()} ${response.statusText()}: ${response.url()}`);
+            }
+        };
+        const handleRequestFailed = (request) => {
+            failedRequests.push(`Failed to load: ${request.url()} (${request.failure()?.errorText || 'unknown error'})`);
+        };
 
         page.on('pageerror', handlePageError);
         page.on('console', handleConsole);
+        page.on('response', handleResponse);
+        page.on('requestfailed', handleRequestFailed);
 
         try {
             if (onRouteProgress) {
@@ -1291,6 +1319,8 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
             // Clean up event listeners for this route
             page.off('pageerror', handlePageError);
             page.off('console', handleConsole);
+            page.off('response', handleResponse);
+            page.off('requestfailed', handleRequestFailed);
 
             const hasError = pageCheck.hasViteOverlay || 
                              pageCheck.hasWebpackOverlay || 
@@ -1311,6 +1341,10 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
                 if (consoleErrors.length > 0) {
                     const firstFew = consoleErrors.slice(0, 5);
                     errorDetails += `\nConsole Errors:\n- ${firstFew.join('\n- ')}\n`;
+                }
+                if (failedRequests.length > 0) {
+                    const firstFew = failedRequests.slice(0, 10);
+                    errorDetails += `\nResource Loading Failures:\n- ${firstFew.join('\n- ')}\n`;
                 }
 
                 // If devServerLogPath is provided, read its tail to get compilation errors
@@ -1338,6 +1372,8 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
             // Ensure listeners are unregistered in case of navigation timeout
             page.off('pageerror', handlePageError);
             page.off('console', handleConsole);
+            page.off('response', handleResponse);
+            page.off('requestfailed', handleRequestFailed);
 
             log(`Failed to capture ${url}: ${e.message}`);
             if (onRouteProgress) {
