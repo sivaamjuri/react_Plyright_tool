@@ -494,6 +494,7 @@ Restart `npm run dev` after changing `.env`.
 | **`npm install` exit 137** (especially under `solution_raw/` or `student_*/`) | **Linux OOM killer** (out of RAM). Code defaults: serialized installs, `--omit=optional`, `--prefer-offline`, foreground scripts, **1024 MB** npm heap, **one automatic retry** after 8s. Add **swap** (see below) or a **larger instance**; in `backend/.env` try `NPM_INSTALL_HEAP_MB=512` or `NPM_INSTALL_OMIT_OPTIONAL=0` only if a package truly needs optional deps. |
 | Message only says **“complete log … in `~/.npm/_logs/…-debug-0.log`”** | Newer npm puts the real error in that file. Latest `server.js` reads that path from the project log and surfaces the real snippet. To inspect manually: `tail -100 /home/ubuntu/.npm/_logs/<that-filename>.log` (user may differ from `ubuntu`). |
 | **`ENOSPC` / “no space left on device”** / `TAR_ENTRY_ERROR` during `npm install` | **Disk full.** `df -h`; remove old **`backend/temp/*`**, clear **`/var/lib/nginx/body`** if uploads filled it, **`npm cache clean --force`**, prune unused **`master_project/node_modules`** only if you will reinstall; **grow the EBS volume** so installs + nginx buffers fit. |
+| **`EMFILE` / `errno: -24` during `watch`** | **Inotify watch limits or file descriptors exceeded.** Run `echo "fs.inotify.max_user_watches=524288" | sudo tee -a /etc/sysctl.conf && sudo sysctl -p` on the EC2 server, and run `pkill -f json-server` to clear any leaked processes. |
 
 ### Adding swap (exit 137 / OOM during `npm install`)
 
@@ -510,6 +511,25 @@ free -h
 ```
 
 Then **`pm2 restart ui-similarity-api`** and retry the compare.
+
+### Fixing EMFILE / Too Many Open Files (errno: -24)
+
+If the server logs show `EMFILE: Too many open files` or `syscall: watch` failed with `EMFILE`, the server has hit the default Linux limit for active file watchers or file descriptors (often due to Vite dev servers watching temporary files).
+
+To fix this on the EC2 server, run:
+```bash
+# 1. Increase inotify watches system-wide:
+echo "fs.inotify.max_user_watches=524288" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+# 2. Force kill any leaked background processes (like orphaned mock backends or old Vite instances):
+pkill -f json-server
+pkill -f vite
+pkill -f esbuild
+
+# 3. Restart your PM2 backend server:
+pm2 restart ui-similarity-api
+```
 
 ---
 

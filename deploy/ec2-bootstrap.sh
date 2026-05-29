@@ -12,6 +12,17 @@ BACKEND="$REPO_ROOT/backend"
 
 cd "$BACKEND"
 
+# Increase Inotify max_user_watches (fixes EMFILE errors when running multiple Vite/Webpack servers)
+echo "=== System Configuration: Inotify max_user_watches ==="
+CURRENT_WATCHES=$(sysctl -n fs.inotify.max_user_watches 2>/dev/null || echo 0)
+if [ "$CURRENT_WATCHES" -lt 524288 ]; then
+  echo "Increasing fs.inotify.max_user_watches from $CURRENT_WATCHES to 524288..."
+  echo "fs.inotify.max_user_watches=524288" | sudo tee -a /etc/sysctl.conf
+  sudo sysctl -p || true
+else
+  echo "fs.inotify.max_user_watches is already sufficient: $CURRENT_WATCHES"
+fi
+
 if [[ ! -f .env ]]; then
   cp .env.example .env
   echo "=== Created backend/.env — EDIT CORS_ORIGINS for your Vercel URL, then: nano .env ==="
