@@ -1,15 +1,22 @@
 .home-container {
-  --home-inline: clamp(0.75rem, 2vw, 1.25rem);
+  --home-inline: clamp(0.5rem, 1vw, 0.75rem);
   min-height: 100vh;
-  padding: clamp(0.65rem, 1.2vw, 1rem) var(--home-inline) 1rem;
+  padding: clamp(0.5rem, 1vw, 0.75rem) var(--home-inline) 1rem;
   padding-top: max(
-    clamp(0.65rem, 1.2vw, 1rem),
+    clamp(0.5rem, 1vw, 0.75rem),
     calc(0.35rem + env(safe-area-inset-top, 0px))
   );
   position: relative;
   background: transparent;
   overflow-x: hidden;
 }
+
+.home-container:not(.home-container--landing) {
+  padding-left: 0;
+  padding-right: 0;
+  padding-top: 0;
+}
+
 
 /* Landing: center whole block vertically + horizontally in viewport */
 .home-container.home-container--landing {
@@ -96,17 +103,23 @@
   flex: 1 1 auto;
   min-width: 0;
   margin: 0;
-  text-align: center;
+  text-align: left;
 }
 
 .home-results-heading {
   width: 100%;
-  max-width: min(1200px, 100%);
-  margin-left: auto;
-  margin-right: auto;
-  padding-left: var(--home-inline);
-  padding-right: var(--home-inline);
+  max-width: 100%;
+  margin: 0 0 1rem 0;
+  padding: calc(0.65rem + env(safe-area-inset-top, 0px)) 1.25rem 0.75rem;
   box-sizing: border-box;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(15, 16, 33, 0.55);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .landing-layout__intro {
@@ -358,18 +371,18 @@
 
 .main-content--results {
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   width: 100%;
-  max-width: min(1200px, 100%);
-  margin: 0 auto;
-  padding: 0 0.25rem 1rem;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 0.75rem;
   box-sizing: border-box;
 }
 .results-wrapper {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 1.25rem;
+  align-items: stretch;
+  gap: 0.75rem;
   width: 100%;
   max-width: 100%;
 }
@@ -383,6 +396,9 @@
   font-weight: 600;
   font-size: 0.85rem;
   transition: all 0.2s;
+  align-self: center;
+  margin-top: 1rem;
+  margin-bottom: 2rem;
 }
 
 .reset-btn:hover {
