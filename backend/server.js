@@ -1581,6 +1581,42 @@ function compareImages(img1Path, img2Path, diffOutputPath) {
 }
 
 
+// Helper: Detect React Routes
+function detectRoutes(projectDir) {
+    const defaultRoutes = ['/', '/login', '/dashboard'];
+    const detected = new Set(defaultRoutes);
+    
+    try {
+        const srcPath = path.join(projectDir, 'src');
+        if (fs.existsSync(srcPath)) {
+            function scanDir(dir) {
+                const files = fs.readdirSync(dir);
+                for (const file of files) {
+                    const fullPath = path.join(dir, file);
+                    const stat = fs.statSync(fullPath);
+                    if (stat.isDirectory() && file !== 'node_modules') {
+                        scanDir(fullPath);
+                    } else if (file.endsWith('.jsx') || file.endsWith('.tsx') || file.endsWith('.js') || file.endsWith('.ts')) {
+                        const content = fs.readFileSync(fullPath, 'utf8');
+                        const routeRegex = /path\s*=\s*["'](\/[^"']*)["']/g;
+                        let match;
+                        while ((match = routeRegex.exec(content)) !== null) {
+                            if (!match[1].includes('*') && !match[1].includes(':')) {
+                                detected.add(match[1]);
+                            }
+                        }
+                    }
+                }
+            }
+            scanDir(srcPath);
+        }
+    } catch (err) {
+        log(`Error detecting routes: ${err.message}`);
+    }
+    
+    return Array.from(detected);
+}
+
 // Serve static files from temp to show screenshots
 app.use('/temp', express.static(TEMP_DIR));
 
@@ -1654,8 +1690,11 @@ app.post('/compare', compareUpload, async (req, res) => {
         const solScreenshotDir = path.join(runDir, 'solution', 'screenshots');
         await fs.ensureDir(solScreenshotDir);
 
+        sendProgress({ type: 'status', message: 'Detecting Application Routes...' });
+        const routes = detectRoutes(solRoot.path);
+        log(`Detected routes for testing: ${routes.join(', ')}`);
+
         sendProgress({ type: 'status', message: 'Capturing Solution Screenshots...' });
-        const routes = ['/'];
         const solLogName = solRoot.type === 'static' ? 'static-server.log' : 'dev-server.log';
         const solLogPath = path.join(solRoot.path, solLogName);
         await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir, sharedBrowser, (evt) => {

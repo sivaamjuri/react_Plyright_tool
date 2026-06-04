@@ -383,9 +383,7 @@ const Home = () => {
           <div className="landing-heading-band landing-heading-band--title-row">
             <h1 className="hero__title hero__title--landing-band">
               <span className="hero__title-line">
-                <span className="hero__title-accent">R</span>eact{" "}
-                <span className="hero__title-accent">U</span>I{" "}
-                <span className="hero__title-accent">V</span>alidator
+                React Visual Regression Testing
               </span>
             </h1>
             {serverToolbar}
@@ -405,17 +403,14 @@ const Home = () => {
               </p>
             </header>
 
-            <div className="hero-notice" role="note">
-              <span className="hero-notice__mark" aria-hidden>
-                i
+            <div className="hero-notice warning-alert" role="alert">
+              <span className="hero-notice__mark warning-mark" aria-hidden>
+                ⚠️
               </span>
               <div className="hero-notice__body">
-                <span className="hero-notice__label">Operational note</span>
+                <span className="hero-notice__label warning-label">Warning</span>
                 <p className="hero-notice__text">
-                  This workspace processes{" "}
-                  <strong>up to {MAX_STUDENT_PROJECTS} student projects</strong>{" "}
-                  per batch. Split larger cohorts into multiple runs to keep
-                  validation fast, stable, and within platform limits.
+                  Visual comparison results may vary due to browser rendering differences, screen resolution, and device scaling.
                 </p>
               </div>
             </div>
@@ -436,9 +431,7 @@ const Home = () => {
         <>
           <header className="hero hero--compact home-results-heading landing-heading-band--title-row">
             <h1 className="hero__title hero__title--compact">
-              <span className="hero__title-accent">R</span>eact{" "}
-              <span className="hero__title-accent">U</span>I{" "}
-              <span className="hero__title-accent">V</span>alidator
+              React Visual Regression Testing
             </h1>
             {serverToolbar}
           </header>

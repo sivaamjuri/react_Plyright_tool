@@ -9,6 +9,24 @@ const Results = ({ data }) => {
 
     const currentProject = data.results[selectedIndex];
 
+    // Calculate pages stats
+    let pagesTested = 0;
+    let passedPages = 0;
+    let failedPages = 0;
+    let processedPages = [];
+
+    if (currentProject && currentProject.pages) {
+        processedPages = Object.entries(currentProject.pages).map(([name, info]) => {
+            const simScore = parseFloat(info.score);
+            const diffScore = (100 - simScore).toFixed(0);
+            const isPass = simScore >= 90; // Defaulting to 90%
+            if (isPass) passedPages++;
+            else failedPages++;
+            return { name, simScore, diffScore, isPass, info };
+        });
+        pagesTested = processedPages.length;
+    }
+
     return (
         <div className="results-container">
             <div className="batch-summary glass-panel">
@@ -84,6 +102,39 @@ const Results = ({ data }) => {
                         )}
                     </div>
 
+                    {currentProject.status === 'success' && (
+                        <div className="dashboard-summary">
+                            <div className="summary-card">
+                                <div className="summary-icon">📄</div>
+                                <div className="summary-content">
+                                    <div className="summary-title">Total Pages</div>
+                                    <div className="summary-value">{pagesTested}</div>
+                                </div>
+                            </div>
+                            <div className="summary-card">
+                                <div className="summary-icon pass">✅</div>
+                                <div className="summary-content">
+                                    <div className="summary-title">Passed Pages</div>
+                                    <div className="summary-value pass-text">{passedPages}</div>
+                                </div>
+                            </div>
+                            <div className="summary-card">
+                                <div className="summary-icon fail">❌</div>
+                                <div className="summary-content">
+                                    <div className="summary-title">Failed Pages</div>
+                                    <div className="summary-value fail-text">{failedPages}</div>
+                                </div>
+                            </div>
+                            <div className="summary-card">
+                                <div className="summary-icon">📊</div>
+                                <div className="summary-content">
+                                    <div className="summary-title">Overall Score</div>
+                                    <div className="summary-value">{currentProject.overallScore}%</div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     {currentProject.timings && (
                         <div className="timings-grid">
                             <div className="timing-item">
@@ -117,14 +168,25 @@ const Results = ({ data }) => {
                         </div>
                     ) : (
                         <div className="comparison-stack">
-                            {Object.entries(currentProject.pages).map(([name, info], index) => (
+                            {processedPages.map(({ name, simScore, diffScore, isPass, info }, index) => (
                                 <div key={index} className="comparison-card">
                                     <div className="card-header">
                                         <div className="name-box">
                                             <span className="route-icon">🔗</span>
                                             <h4>{name}</h4>
+                                            <span className={`status-badge ${isPass ? 'pass' : 'fail'}`}>
+                                                {isPass ? 'Pass' : 'Fail'}
+                                            </span>
                                         </div>
-                                        <div className="mini-score">{info.score} match</div>
+                                        <div className="score-details">
+                                            <div className="score-text">
+                                                <span className="sim-score">Similarity: {simScore}%</span>
+                                                <span className="diff-score">Difference: {diffScore}%</span>
+                                            </div>
+                                            <div className="score-bar-container">
+                                                <div className="score-bar" style={{ width: `${simScore}%`, backgroundColor: isPass ? '#10b981' : '#ef4444' }} />
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <div className="visual-grid">
