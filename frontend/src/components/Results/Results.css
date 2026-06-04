@@ -5,11 +5,11 @@
 /* ── Layout Shell ─────────────────────────────────────────────── */
 .results-container {
     display: flex;
-    gap: 1.75rem;
+    gap: 1rem;
     width: 100%;
     max-width: 100%;
     margin: 0;
-    padding: 1.25rem;
+    padding: 0.5rem 0.75rem;
     box-sizing: border-box;
     align-items: flex-start;
     animation: resultsEnter 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -26,18 +26,19 @@
 
 /* ── LEFT SIDEBAR ─────────────────────────────────────────────── */
 .batch-sidebar {
-    flex: 0 0 280px;
-    min-width: 260px;
-    max-width: 300px;
+    flex: 0 0 30%;
+    width: 30%;
+    min-width: 0;
+    max-width: 30%;
     position: sticky;
-    top: 1.5rem;
-    padding: 1.5rem 1.25rem;
+    top: 0.75rem;
+    padding: 1rem 0.9rem;
     display: flex;
     flex-direction: column;
     gap: 0;
     background: rgba(10, 11, 26, 0.55);
     border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 18px;
+    border-radius: 14px;
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     box-shadow: 0 4px 32px rgba(0, 0, 0, 0.35);
@@ -47,7 +48,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 1rem;
+    margin-bottom: 0.65rem;
 }
 
 .sidebar-title {
@@ -74,11 +75,11 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.65rem 0.9rem;
+    padding: 0.5rem 0.75rem;
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
-    margin-bottom: 1rem;
+    border-radius: 8px;
+    margin-bottom: 0.65rem;
 }
 
 .meta-label {
@@ -99,13 +100,13 @@
 /* Download Button */
 .download-excel-btn {
     width: 100%;
-    margin-bottom: 1.25rem;
-    padding: 0.75rem 1rem;
+    margin-bottom: 0.75rem;
+    padding: 0.6rem 0.9rem;
     background: linear-gradient(135deg, #0d9488 0%, #0891b2 100%);
     color: #fff;
     border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-    font-size: 0.82rem;
+    border-radius: 8px;
+    font-size: 0.8rem;
     font-weight: 600;
     letter-spacing: 0.02em;
     cursor: pointer;
@@ -195,12 +196,13 @@
 
 /* ── RIGHT DETAIL PANEL ───────────────────────────────────────── */
 .detail-panel {
-    flex: 1 1 0;
+    flex: 0 0 70%;
+    width: 70%;
     min-width: 0;
-    padding: 2rem;
+    padding: 1rem 1.1rem;
     background: rgba(10, 11, 26, 0.4);
     border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 18px;
+    border-radius: 14px;
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     box-shadow: 0 4px 40px rgba(0, 0, 0, 0.3);
@@ -211,8 +213,8 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1.75rem;
-    padding-bottom: 1.25rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
