@@ -378,17 +378,19 @@ const Home = () => {
     >
       <div className="home-container__glow" aria-hidden />
 
+      {/* Global Application Header */}
+      <header className="home-results-heading landing-heading-band--title-row">
+        <div className="header-title-wrapper">
+          <h1 className="hero__title hero__title--compact">
+            React Visual Regression
+          </h1>
+          <span className="header-tagline">Visual Regression Testing & QA Diffing</span>
+        </div>
+        {serverToolbar}
+      </header>
+
       {!results ? (
         <div className="landing-layout">
-          <div className="landing-heading-band landing-heading-band--title-row">
-            <h1 className="hero__title hero__title--landing-band">
-              <span className="hero__title-line">
-                React Visual Regression Testing
-              </span>
-            </h1>
-            {serverToolbar}
-          </div>
-
           <div className="landing-layout__intro">
             <header className="hero hero--landing-split">
               <p className="hero__eyebrow">Enterprise visual QA for React</p>
@@ -429,13 +431,6 @@ const Home = () => {
         </div>
       ) : (
         <>
-          <header className="hero hero--compact home-results-heading landing-heading-band--title-row">
-            <h1 className="hero__title hero__title--compact">
-              React Visual Regression Testing
-            </h1>
-            {serverToolbar}
-          </header>
-
           <main className="main-content main-content--results">
             <div className="results-wrapper">
               <Results data={results} />
