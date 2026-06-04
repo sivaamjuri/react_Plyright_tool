@@ -2,6 +2,74 @@ import { useState } from 'react';
 import * as XLSX from 'xlsx';
 import './Results.css';
 
+const ComparisonCard = ({ name, simScore, diffScore, isPass, info }) => {
+    const [activeTab, setActiveTab] = useState('student');
+
+    return (
+        <div className="comparison-card">
+            <div className="card-header">
+                <div className="name-box">
+                    <span className="route-icon">🔗</span>
+                    <h4>{name}</h4>
+                    <span className={`status-badge ${isPass ? 'pass' : 'fail'}`}>
+                        {isPass ? 'Pass' : 'Fail'}
+                    </span>
+                </div>
+                <div className="score-details">
+                    <div className="score-text">
+                        <span className="sim-score">Similarity: {simScore}%</span>
+                        <span className="diff-score">Difference: {diffScore}%</span>
+                    </div>
+                    <div className="score-bar-container">
+                        <div className="score-bar" style={{ width: `${simScore}%`, backgroundColor: isPass ? '#10b981' : '#ef4444' }} />
+                    </div>
+                </div>
+            </div>
+
+            <div className="tab-container">
+                <div className="tab-bar">
+                    <button 
+                        className={`tab-btn ${activeTab === 'solution' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('solution')}
+                    >
+                        Reference Solution
+                    </button>
+                    <button 
+                        className={`tab-btn ${activeTab === 'student' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('student')}
+                    >
+                        Student Submission
+                    </button>
+                    <button 
+                        className={`tab-btn ${activeTab === 'diff' ? 'active' : ''}`}
+                        onClick={() => setActiveTab('diff')}
+                    >
+                        Visual Difference
+                    </button>
+                </div>
+                
+                <div className="unified-viewer">
+                    {activeTab === 'solution' && (
+                        <div className="viewer-image animate-fade">
+                            <img src={info.solutionImage} alt="Solution" />
+                        </div>
+                    )}
+                    {activeTab === 'student' && (
+                        <div className="viewer-image animate-fade">
+                            <img src={info.studentImage} alt="Student" />
+                        </div>
+                    )}
+                    {activeTab === 'diff' && (
+                        <div className="viewer-image diff animate-fade">
+                            <img src={info.diffImage} alt="Difference" />
+                        </div>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const Results = ({ data }) => {
     const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -168,50 +236,8 @@ const Results = ({ data }) => {
                         </div>
                     ) : (
                         <div className="comparison-stack">
-                            {processedPages.map(({ name, simScore, diffScore, isPass, info }, index) => (
-                                <div key={index} className="comparison-card">
-                                    <div className="card-header">
-                                        <div className="name-box">
-                                            <span className="route-icon">🔗</span>
-                                            <h4>{name}</h4>
-                                            <span className={`status-badge ${isPass ? 'pass' : 'fail'}`}>
-                                                {isPass ? 'Pass' : 'Fail'}
-                                            </span>
-                                        </div>
-                                        <div className="score-details">
-                                            <div className="score-text">
-                                                <span className="sim-score">Similarity: {simScore}%</span>
-                                                <span className="diff-score">Difference: {diffScore}%</span>
-                                            </div>
-                                            <div className="score-bar-container">
-                                                <div className="score-bar" style={{ width: `${simScore}%`, backgroundColor: isPass ? '#10b981' : '#ef4444' }} />
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    <div className="visual-grid">
-                                        <div className="view-container">
-                                            <div className="view-label">Reference Solution</div>
-                                            <div className="image-wrapper">
-                                                <img src={info.solutionImage} alt="Solution" />
-                                            </div>
-                                        </div>
-
-                                        <div className="view-container student">
-                                            <div className="view-label">Student Submission</div>
-                                            <div className="image-wrapper">
-                                                <img src={info.studentImage} alt="Student" />
-                                            </div>
-                                        </div>
-
-                                        <div className="view-container diff">
-                                            <div className="view-label">Visual Difference</div>
-                                            <div className="image-wrapper">
-                                                <img src={info.diffImage} alt="Difference" />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
+                            {processedPages.map((pageProps, index) => (
+                                <ComparisonCard key={index} {...pageProps} />
                             ))}
                         </div>
                     )}
