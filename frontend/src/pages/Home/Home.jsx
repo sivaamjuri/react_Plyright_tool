@@ -336,13 +336,8 @@ const Home = () => {
               <path d="M3 11v6c0 1.7 4 3 9 3s9-1.3 9-3v-6" />
             </svg>
           </span>
-          <span className="home-chrome__disk-main">
-            <span className="home-chrome__disk-text">
-              {cleanupBusy ? "Cleaning…" : "Free disk"}
-            </span>
-            <span className="home-chrome__disk-sub">
-              <span className="home-chrome__disk-sub-label">React host</span>
-            </span>
+          <span className="home-chrome__disk-text">
+            {cleanupBusy ? "Cleaning…" : "Free disk"}
           </span>
         </button>
         <div className="home-chrome__tooltip" role="presentation">
@@ -384,7 +379,7 @@ const Home = () => {
           <h1 className="hero__title hero__title--compact">
             React Visual Regression
           </h1>
-          <span className="header-tagline">Visual Regression Testing & QA Diffing</span>
+          <span className="header-tagline">Pixel-perfect visual diffing & regression testing</span>
         </div>
         {serverToolbar}
       </header>
