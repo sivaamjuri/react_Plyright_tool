@@ -9,11 +9,10 @@
 
 
 
-/* Landing: center whole block vertically + horizontally in viewport */
+/* Landing: header at top, content centered in remaining height */
 .home-container.home-container--landing {
   display: flex;
   flex-direction: column;
-  justify-content: center;
   align-items: center;
 }
 
@@ -54,7 +53,7 @@
   z-index: 1;
   width: 100%;
   max-width: 720px;
-  margin: 0 auto;
+  margin: auto auto;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -62,6 +61,8 @@
   gap: clamp(0.75rem, 2.5vw, 1.25rem);
   padding: 0 var(--home-inline);
   padding-top: 0.15rem;
+}
+
 .hero__title--compact {
   flex: 1 1 auto;
   min-width: 0;
