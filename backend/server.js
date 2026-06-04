@@ -1586,8 +1586,8 @@ function compareImages(img1Path, img2Path, diffOutputPath) {
 
 // Helper: Detect React Routes
 function detectRoutes(projectDir) {
-    const defaultRoutes = ['/', '/login', '/dashboard'];
-    const detected = new Set(defaultRoutes);
+    const detected = new Set();
+    let hasRouter = false;
     
     try {
         const srcPath = path.join(projectDir, 'src');
@@ -1601,6 +1601,9 @@ function detectRoutes(projectDir) {
                         scanDir(fullPath);
                     } else if (file.endsWith('.jsx') || file.endsWith('.tsx') || file.endsWith('.js') || file.endsWith('.ts')) {
                         const content = fs.readFileSync(fullPath, 'utf8');
+                        if (content.includes('react-router') || content.includes('<Route')) {
+                            hasRouter = true;
+                        }
                         const routeRegex = /path\s*=\s*["'](\/[^"']*)["']/g;
                         let match;
                         while ((match = routeRegex.exec(content)) !== null) {
@@ -1617,7 +1620,14 @@ function detectRoutes(projectDir) {
         log(`Error detecting routes: ${err.message}`);
     }
     
-    return Array.from(detected);
+    // If routes were detected, ensure at least root '/' is included
+    if (detected.size > 0) {
+        detected.add('/');
+        return Array.from(detected);
+    }
+    
+    // If no routes were detected (single page app), just test the root
+    return ['/'];
 }
 
 // Serve static files from temp to show screenshots
