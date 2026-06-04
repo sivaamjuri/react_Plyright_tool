@@ -1220,6 +1220,9 @@ function startServer(projectInfo, port) {
                 const args = ['run', cmd];
                 if (npmScriptNeedsPortFlag(scripts[cmd], cmd)) {
                     args.push('--', '--port', port.toString(), '--host', '127.0.0.1');
+                    if (/vite/.test(scriptBody)) {
+                        args.push('--strictPort');
+                    }
                 }
 
                 serverProc = spawn('npm', args, {
