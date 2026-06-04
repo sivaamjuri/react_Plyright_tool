@@ -138,6 +138,23 @@ function enqueueNpmInstallSerialized(fn) {
     return run;
 }
 
+const net = require('net');
+
+async function getAvailablePort(startingAt) {
+    function getNextAvailablePort(currentPort, cb) {
+        const srv = net.createServer();
+        srv.listen(currentPort, () => {
+            srv.once('close', () => cb(currentPort));
+            srv.close();
+        });
+        srv.on('error', (err) => {
+            if (err.code === 'EADDRINUSE') getNextAvailablePort(currentPort + 1, cb);
+            else cb(currentPort + 1); // fallback
+        });
+    }
+    return new Promise(resolve => getNextAvailablePort(startingAt, resolve));
+}
+
 const normalizeOrigin = (s) => String(s || '').trim().replace(/\/+$/, '');
 
 const parseAllowedOrigins = () => {
@@ -1696,7 +1713,8 @@ app.post('/compare', compareUpload, async (req, res) => {
         extractAdmZipSafe(solutionFile.path, solExtractDir);
 
         const solRoot = asProjectInfo(await findProjectRoot(solExtractDir));
-        const solPort = 14000 + Math.floor(Math.random() * 500);
+        const solBasePort = 14000 + Math.floor(Math.random() * 500);
+        const solPort = await getAvailablePort(solBasePort);
         sendProgress({ type: 'status', message: 'Starting Solution Server...' });
         solServer = await startServer(solRoot, solPort); // Assign to solServer
 
@@ -1904,7 +1922,8 @@ app.post('/compare', compareUpload, async (req, res) => {
                         phase: 'workspace',
                         message: `Project root: ${path.basename(stuProjectRoot.path)}`
                     });
-                    const stuPort = 15000 + (i * 10) + (index + Math.floor(Math.random() * 100));
+                    const basePort = 15000 + (i * 10) + (index + Math.floor(Math.random() * 100));
+                    const stuPort = await getAvailablePort(basePort);
 
                     sendProgress({
                         type: 'pipeline',
