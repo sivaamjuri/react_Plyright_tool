@@ -1351,6 +1351,48 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
 
 const LOGIN_URL_PATTERN = /\/(login|signin|sign-in|log-in|auth)(\/|$|\?|#)/i;
 
+// Scan project source files to discover the actual cookie/localStorage key names
+// used for auth (e.g. Cookies.get('jwt_token'), localStorage.getItem('userToken'))
+function discoverAuthTokenNames(projectDir) {
+    const found = new Set();
+    const FALLBACK_NAMES = ['jwt_token', 'token', 'auth_token', 'authToken', 'accessToken', 'userToken', 'user_token'];
+
+    const scanFile = (filePath) => {
+        try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            // Cookies.get / Cookies.set / Cookies.remove('name')
+            const cookieRe = /Cookies\s*\.\s*(?:get|set|remove)\s*\(\s*['"`]([^'"`\s]+)['"`]/g;
+            // localStorage / sessionStorage .getItem / .setItem('name')
+            const storageRe = /(?:localStorage|sessionStorage)\s*\.\s*(?:getItem|setItem|removeItem)\s*\(\s*['"`]([^'"`\s]+)['"`]/g;
+            let m;
+            while ((m = cookieRe.exec(content)) !== null) found.add(m[1]);
+            while ((m = storageRe.exec(content)) !== null) found.add(m[1]);
+        } catch (_) {}
+    };
+
+    const scanDir = (dir) => {
+        try {
+            const items = fs.readdirSync(dir, { withFileTypes: true });
+            for (const item of items) {
+                if (item.name === 'node_modules' || item.name === '.git' || item.name === 'dist') continue;
+                const full = path.join(dir, item.name);
+                if (item.isDirectory()) scanDir(full);
+                else if (/\.(js|jsx|ts|tsx)$/.test(item.name)) scanFile(full);
+            }
+        } catch (_) {}
+    };
+
+    const srcDir = path.join(projectDir, 'src');
+    scanDir(fs.existsSync(srcDir) ? srcDir : projectDir);
+
+    // Merge discovered names with fallback defaults (discovered names first)
+    const merged = [...found, ...FALLBACK_NAMES.filter(n => !found.has(n))];
+    if (found.size > 0) {
+        log(`Auth: discovered token key names in source: ${[...found].join(', ')}`);
+    }
+    return merged;
+}
+
 // Helper: Detect login page — URL-based (covers React Router redirects) + DOM-based
 async function detectLoginPage(page) {
     const urlMatch = LOGIN_URL_PATTERN.test(page.url());
@@ -1371,27 +1413,34 @@ async function detectLoginPage(page) {
     return { ...domInfo, urlMatch, isLoginPage };
 }
 
-// Strategy 1: Inject common auth cookies + localStorage (works for apps that only check
-// token *existence*, not validity — e.g. NxtWave projects using js-cookie / ProtectedRoute)
-async function tryInjectAuthToken(page) {
+// Strategy 1: Inject auth cookies + localStorage using discovered + fallback names
+// Works for apps that only check token existence (not validity)
+async function tryInjectAuthToken(page, tokenNames) {
     try {
         const urlObj = new URL(page.url());
         const domain = urlObj.hostname;
         const DUMMY = 'screenshot_auth_token';
 
-        await page.context().addCookies([
-            { name: 'jwt_token',   value: DUMMY, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
-            { name: 'token',       value: DUMMY, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
-            { name: 'auth_token',  value: DUMMY, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
-            { name: 'accessToken', value: DUMMY, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
-        ]);
-        await page.evaluate((dummy) => {
-            localStorage.setItem('jwt_token',   dummy);
-            localStorage.setItem('token',       dummy);
-            localStorage.setItem('authToken',   dummy);
-            localStorage.setItem('accessToken', dummy);
-            localStorage.setItem('user', JSON.stringify({ id: 1, email: 'admin@example.com', name: 'Admin', role: 'admin' }));
-        }, DUMMY);
+        // Set every discovered name as a cookie
+        await page.context().addCookies(
+            tokenNames.map(name => ({
+                name, value: DUMMY, domain, path: '/',
+                httpOnly: false, secure: false, sameSite: 'Lax'
+            }))
+        );
+
+        // Set every discovered name in localStorage + sessionStorage
+        await page.evaluate(({ names, dummy }) => {
+            names.forEach(name => {
+                localStorage.setItem(name, dummy);
+                sessionStorage.setItem(name, dummy);
+            });
+            // Also inject a common 'user' object in case the app reads it
+            const userObj = JSON.stringify({ id: 1, email: 'admin@example.com', name: 'Admin', role: 'admin' });
+            localStorage.setItem('user', userObj);
+            localStorage.setItem('currentUser', userObj);
+            sessionStorage.setItem('user', userObj);
+        }, { names: tokenNames, dummy: DUMMY });
 
         await page.reload({ waitUntil: 'domcontentloaded' });
         await page.waitForTimeout(1500);
@@ -1450,9 +1499,9 @@ async function tryFormLogin(page, email, password) {
 }
 
 // Helper: Attempt login — token injection first, then form credentials
-async function attemptLogin(page) {
-    log(`Auth: trying cookie/localStorage token injection...`);
-    const injected = await tryInjectAuthToken(page);
+async function attemptLogin(page, tokenNames) {
+    log(`Auth: trying cookie/localStorage token injection (${tokenNames.length} key names)...`);
+    const injected = await tryInjectAuthToken(page, tokenNames);
     if (injected) {
         log(`Auth: token injection succeeded (app only checks token existence)`);
         return true;
@@ -1480,7 +1529,8 @@ async function attemptLogin(page) {
 
 // Helper: Capture Screenshots
 // onRouteProgress: optional ({ kind: 'start'|'done'|'auth', ... }) => void
-async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = null, onRouteProgress = null, devServerLogPath = null) {
+// projectDir: optional — used to scan source for cookie/localStorage key names before auth
+async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = null, onRouteProgress = null, devServerLogPath = null, projectDir = null) {
     await fs.ensureDir(outputDir);
     const ownBrowser = !sharedBrowser;
     const browser = sharedBrowser || await chromium.launch();
@@ -1504,8 +1554,11 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
             if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'logging_in', message: 'Logging in' });
             log(`Auth: login page detected at ${page.url()} — attempting login`);
 
+            // Discover token key names from project source (falls back to defaults if projectDir null)
+            const tokenNames = projectDir ? discoverAuthTokenNames(projectDir) : discoverAuthTokenNames('');
+
             let loginSuccess = false;
-            try { loginSuccess = await attemptLogin(page); } catch (_) {}
+            try { loginSuccess = await attemptLogin(page, tokenNames); } catch (_) {}
 
             if (loginSuccess) {
                 log(`Auth: login successful — now at ${page.url()}`);
@@ -1943,7 +1996,7 @@ app.post('/compare', compareUpload, async (req, res) => {
                         message: `Screenshot failed — ${evt.fileName}: ${evt.error || 'unknown error'}`
                     });
                 }
-            }, solLogPath);
+            }, solLogPath, solRoot.path);
         } catch (solAuthErr) {
             // Auth failure on solution ends the run gracefully (no reference = cannot compare)
             sendProgress({ type: 'error', message: `Solution screenshots failed: ${solAuthErr.message}. Cannot compare without reference screenshots.` });
@@ -2186,7 +2239,7 @@ app.post('/compare', compareUpload, async (req, res) => {
                                 message: `Screenshot failed — ${evt.fileName}: ${evt.error || 'unknown error'}`
                             });
                         }
-                    }, stuLogPath);
+                    }, stuLogPath, stuProjectRoot.path);
                     tScreenshot = performance.now() - t1;
 
                     sendProgress({
