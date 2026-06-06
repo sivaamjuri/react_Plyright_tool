@@ -1349,13 +1349,116 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
     check();
 }
 
+// Helper: Detect login page by checking for password + email/username fields
+async function detectLoginPage(page) {
+    return page.evaluate(() => {
+        const inputs = Array.from(document.querySelectorAll('input'));
+        const hasEmail = inputs.some(i =>
+            /email|username|user/i.test([i.type, i.name, i.id, i.placeholder].join(' '))
+        );
+        const hasPassword = inputs.some(i => i.type === 'password');
+        const buttons = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+        const hasLoginBtn = buttons.some(b =>
+            /login|sign.?in|log.?in|submit/i.test((b.textContent || '') + (b.value || ''))
+        );
+        return {
+            hasEmail,
+            hasPassword,
+            hasLoginBtn,
+            isLoginPage: hasPassword && (hasEmail || hasLoginBtn || buttons.length > 0)
+        };
+    });
+}
+
+// Helper: Attempt login with fixed credentials
+async function attemptLogin(page) {
+    const EMAIL = 'user@example.com';
+    const PASSWORD = 'password123';
+    try {
+        const emailSel = [
+            'input[type="email"]',
+            'input[name*="email" i]',
+            'input[name*="username" i]',
+            'input[name*="user" i]',
+            'input[id*="email" i]',
+            'input[id*="username" i]',
+            'input[placeholder*="email" i]',
+            'input[placeholder*="username" i]',
+        ].join(', ');
+        const emailField = await page.$(emailSel);
+        if (emailField) await emailField.fill(EMAIL);
+
+        const passwordField = await page.$('input[type="password"]');
+        if (passwordField) await passwordField.fill(PASSWORD);
+
+        const submitBtn = await page.$('button[type="submit"], input[type="submit"]');
+        if (submitBtn) {
+            await submitBtn.click();
+        } else {
+            const btns = await page.$$('button');
+            let clicked = false;
+            for (const btn of btns) {
+                const text = await btn.innerText().catch(() => '');
+                if (/login|sign.?in|log.?in/i.test(text)) {
+                    await btn.click();
+                    clicked = true;
+                    break;
+                }
+            }
+            if (!clicked && btns.length > 0) await btns[0].click();
+        }
+
+        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(1000);
+
+        const stillLogin = await detectLoginPage(page).catch(() => ({ isLoginPage: false }));
+        return !stillLogin.isLoginPage;
+    } catch (e) {
+        return false;
+    }
+}
+
 // Helper: Capture Screenshots
-// onRouteProgress: optional ({ kind: 'start'|'done', route, pageLabel, fileName, ok?, error? }) => void
+// onRouteProgress: optional ({ kind: 'start'|'done'|'auth', ... }) => void
 async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = null, onRouteProgress = null, devServerLogPath = null) {
     await fs.ensureDir(outputDir);
     const ownBrowser = !sharedBrowser;
     const browser = sharedBrowser || await chromium.launch();
     const page = await browser.newPage();
+
+    // --- Authentication pre-check (before route loop) ---
+    try {
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await page.goto(baseUrl, { waitUntil: 'load', timeout: PLAYWRIGHT_GOTO_TIMEOUT_MS });
+        await page.waitForTimeout(300);
+
+        let loginInfo = { isLoginPage: false };
+        try { loginInfo = await detectLoginPage(page); } catch (_) {}
+
+        if (loginInfo.isLoginPage) {
+            if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'detected', message: 'Authentication detected' });
+            if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'logging_in', message: 'Logging in' });
+
+            let loginSuccess = false;
+            try { loginSuccess = await attemptLogin(page); } catch (_) {}
+
+            if (loginSuccess) {
+                if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'success', message: 'Login successful' });
+                try { await page.context().storageState(); } catch (_) {}
+                if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'state_saved', message: 'Auth state saved' });
+                if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'capturing', message: 'Capturing protected routes' });
+            } else {
+                if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'failed', message: 'Authentication failed' });
+                await page.close();
+                if (ownBrowser) await browser.close();
+                throw new Error('Authentication Failed');
+            }
+        }
+    } catch (authErr) {
+        if (authErr.message === 'Authentication Failed') throw authErr;
+        log(`Auth pre-check skipped (non-fatal): ${authErr.message}`);
+    }
+    // --- End authentication pre-check ---
 
     for (const route of routes) {
         const url = `${baseUrl}${route}`;
@@ -1729,7 +1832,17 @@ app.post('/compare', compareUpload, async (req, res) => {
         const solLogName = solRoot.type === 'static' ? 'static-server.log' : 'dev-server.log';
         const solLogPath = path.join(solRoot.path, solLogName);
         await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir, sharedBrowser, (evt) => {
-            if (evt.kind === 'start') {
+            if (evt.kind === 'auth') {
+                sendProgress({
+                    type: 'pipeline',
+                    scope: 'reference',
+                    projectIndex: 0,
+                    projectTotal: 0,
+                    studentName: 'Reference solution',
+                    phase: `auth_${evt.stage}`,
+                    message: evt.message
+                });
+            } else if (evt.kind === 'start') {
                 sendProgress({
                     type: 'pipeline',
                     scope: 'reference',
@@ -1960,7 +2073,16 @@ app.post('/compare', compareUpload, async (req, res) => {
 
                     const t1 = performance.now();
                     await captureScreenshots(stuServer.baseUrl, routes, stuScreenshotDir, sharedBrowser, (evt) => {
-                        if (evt.kind === 'start') {
+                        if (evt.kind === 'auth') {
+                            sendProgress({
+                                type: 'pipeline',
+                                projectIndex: projectNum,
+                                projectTotal,
+                                studentName: task.name,
+                                phase: `auth_${evt.stage}`,
+                                message: evt.message
+                            });
+                        } else if (evt.kind === 'start') {
                             sendProgress({
                                 type: 'pipeline',
                                 projectIndex: projectNum,
