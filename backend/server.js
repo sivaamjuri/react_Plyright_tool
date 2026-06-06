@@ -1349,9 +1349,15 @@ function checkServerReady(port, basePath, serverProcess, resolve, reject, logPat
     check();
 }
 
-// Helper: Detect login page by checking for password + email/username fields
+const LOGIN_URL_PATTERN = /\/(login|signin|sign-in|log-in|auth)(\/|$|\?|#)/i;
+
+// Helper: Detect login page — URL-based (covers React Router redirects) + DOM-based
 async function detectLoginPage(page) {
-    return page.evaluate(() => {
+    // Primary: check if the current URL already points to a login route
+    const urlMatch = LOGIN_URL_PATTERN.test(page.url());
+
+    // Secondary: look for password field in the DOM
+    const domInfo = await page.evaluate(() => {
         const inputs = Array.from(document.querySelectorAll('input'));
         const hasEmail = inputs.some(i =>
             /email|username|user/i.test([i.type, i.name, i.id, i.placeholder].join(' '))
@@ -1361,13 +1367,11 @@ async function detectLoginPage(page) {
         const hasLoginBtn = buttons.some(b =>
             /login|sign.?in|log.?in|submit/i.test((b.textContent || '') + (b.value || ''))
         );
-        return {
-            hasEmail,
-            hasPassword,
-            hasLoginBtn,
-            isLoginPage: hasPassword && (hasEmail || hasLoginBtn || buttons.length > 0)
-        };
-    });
+        return { hasEmail, hasPassword, hasLoginBtn };
+    }).catch(() => ({ hasEmail: false, hasPassword: false, hasLoginBtn: false }));
+
+    const isLoginPage = urlMatch || (domInfo.hasPassword && (domInfo.hasEmail || domInfo.hasLoginBtn || true));
+    return { ...domInfo, urlMatch, isLoginPage };
 }
 
 // Helper: Attempt login with fixed credentials
@@ -1391,6 +1395,8 @@ async function attemptLogin(page) {
         const passwordField = await page.$('input[type="password"]');
         if (passwordField) await passwordField.fill(PASSWORD);
 
+        const urlBeforeSubmit = page.url();
+
         const submitBtn = await page.$('button[type="submit"], input[type="submit"]');
         if (submitBtn) {
             await submitBtn.click();
@@ -1408,9 +1414,14 @@ async function attemptLogin(page) {
             if (!clicked && btns.length > 0) await btns[0].click();
         }
 
+        // Wait for navigation after submit (React Router navigates client-side)
         await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(1500);
 
+        const newUrl = page.url();
+        // Success: URL changed and is no longer a login URL
+        if (newUrl !== urlBeforeSubmit && !LOGIN_URL_PATTERN.test(newUrl)) return true;
+        // Fallback: DOM check
         const stillLogin = await detectLoginPage(page).catch(() => ({ isLoginPage: false }));
         return !stillLogin.isLoginPage;
     } catch (e) {
@@ -1429,30 +1440,39 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
     // --- Authentication pre-check (before route loop) ---
     try {
         await page.setViewportSize({ width: 1280, height: 800 });
-        await page.goto(baseUrl, { waitUntil: 'load', timeout: PLAYWRIGHT_GOTO_TIMEOUT_MS });
-        await page.waitForTimeout(300);
+        // domcontentloaded fires earlier than load — React needs to run AFTER this, so we add wait below
+        await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: PLAYWRIGHT_GOTO_TIMEOUT_MS });
+        // Wait for React to mount and for React Router to process any redirect (e.g. / → /login)
+        await page.waitForTimeout(2000);
 
         let loginInfo = { isLoginPage: false };
         try { loginInfo = await detectLoginPage(page); } catch (_) {}
 
+        log(`Auth check — URL after settle: ${page.url()} | urlMatch: ${loginInfo.urlMatch} | domPassword: ${loginInfo.hasPassword}`);
+
         if (loginInfo.isLoginPage) {
             if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'detected', message: 'Authentication detected' });
             if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'logging_in', message: 'Logging in' });
+            log(`Auth: login page detected at ${page.url()} — attempting login`);
 
             let loginSuccess = false;
             try { loginSuccess = await attemptLogin(page); } catch (_) {}
 
             if (loginSuccess) {
+                log(`Auth: login successful — now at ${page.url()}`);
                 if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'success', message: 'Login successful' });
                 try { await page.context().storageState(); } catch (_) {}
                 if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'state_saved', message: 'Auth state saved' });
                 if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'capturing', message: 'Capturing protected routes' });
             } else {
+                log(`Auth: login failed — still at ${page.url()}`);
                 if (onRouteProgress) onRouteProgress({ kind: 'auth', stage: 'failed', message: 'Authentication failed' });
                 await page.close();
                 if (ownBrowser) await browser.close();
                 throw new Error('Authentication Failed');
             }
+        } else {
+            log(`Auth check — no login page detected, proceeding without auth`);
         }
     } catch (authErr) {
         if (authErr.message === 'Authentication Failed') throw authErr;
