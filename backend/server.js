@@ -1684,18 +1684,23 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
             page.off('response', handleResponse);
             page.off('requestfailed', handleRequestFailed);
 
-            const hasError = pageCheck.hasViteOverlay || 
-                             pageCheck.hasWebpackOverlay || 
-                             pageCheck.hasShadowOverlay || 
-                             pageCheck.isBlank;
+            const hasCompileError = pageCheck.hasViteOverlay ||
+                                    pageCheck.hasWebpackOverlay ||
+                                    pageCheck.hasShadowOverlay;
 
-            if (hasError) {
-                let errorDetails = '';
-                if (pageCheck.hasViteOverlay || pageCheck.hasWebpackOverlay || pageCheck.hasShadowOverlay) {
-                    errorDetails += `An error/compilation overlay was detected on the page. The application failed to compile or run.\n`;
-                } else if (pageCheck.isBlank) {
-                    errorDetails += `The application rendered a completely blank page (no root content found).\n`;
+            // Blank page without a compile overlay means the route is not implemented.
+            // Score it as 0% for this route and continue — do not skip the whole project.
+            if (pageCheck.isBlank && !hasCompileError) {
+                const blankMsg = `Route ${route} rendered a blank page (not implemented) — scoring as 0%`;
+                log(blankMsg);
+                if (onRouteProgress) {
+                    onRouteProgress({ kind: 'done', route, pageLabel, fileName, ok: false, error: 'Blank page — route not implemented' });
                 }
+                continue;
+            }
+
+            if (hasCompileError) {
+                let errorDetails = `An error/compilation overlay was detected on the page. The application failed to compile or run.\n`;
 
                 if (pageErrors.length > 0) {
                     errorDetails += `\nUncaught JavaScript Exceptions:\n- ${pageErrors.join('\n- ')}\n`;
