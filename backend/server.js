@@ -1656,26 +1656,38 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
             await page.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; caret-color: transparent !important; }' });
 
             // Small settle delay for dynamic layout without adding too much latency
-            await page.waitForTimeout(300);
+            await page.waitForTimeout(500);
 
-            // If a protected route redirected us to login (e.g. cookie not carried), re-inject and retry
-            if (authTokenNames && LOGIN_URL_PATTERN.test(page.url())) {
-                log(`Route ${route}: redirected to login after navigation — re-injecting auth tokens and retrying`);
+            // If a non-login route redirected us to the login page, re-inject auth and retry.
+            // Fires even when auth was not detected in the pre-check (handles lazy-redirect apps).
+            if (LOGIN_URL_PATTERN.test(page.url()) && !LOGIN_URL_PATTERN.test(url)) {
+                log(`Route ${route}: unexpectedly landed on login — re-injecting auth tokens and retrying`);
                 try {
+                    const reAuthNames = authTokenNames || discoverAuthTokenNames(projectDir || '');
                     const domain = new URL(baseUrl).hostname;
                     await page.context().addCookies(
-                        authTokenNames.map(name => ({ name, value: 'screenshot_auth_token', domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' }))
+                        reAuthNames.map(name => ({ name, value: 'screenshot_auth_token', domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' }))
                     );
                     await page.evaluate((names) => {
                         const v = 'screenshot_auth_token';
                         names.forEach(n => { localStorage.setItem(n, v); sessionStorage.setItem(n, v); });
-                    }, authTokenNames);
+                    }, reAuthNames);
                     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: PLAYWRIGHT_GOTO_TIMEOUT_MS });
                     await page.waitForTimeout(1500);
                 } catch (reAuthErr) {
                     log(`Re-auth on route ${route} failed (non-fatal): ${reAuthErr.message}`);
                 }
             }
+
+            // Wait up to 2 s for async-rendered content to appear (useEffect data fetch, Suspense, etc.)
+            // This prevents false "blank" detection when the root is temporarily empty during loading.
+            try {
+                await page.waitForFunction(() => {
+                    const r = document.getElementById('root') || document.getElementById('app');
+                    if (r) return r.innerHTML.trim() !== '';
+                    return document.body && document.body.innerText.trim() !== '';
+                }, { timeout: 2000 });
+            } catch (_) { /* still blank after 2 s — proceed to blank-check below */ }
 
             // Check for blank page or compilation error overlays
             const pageCheck = await page.evaluate(() => {
@@ -1736,25 +1748,19 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
                                     pageCheck.hasShadowOverlay;
 
             // Blank page without a compile overlay means the route is not implemented.
-            // Save a visible placeholder screenshot and score 0% for this route — continue without skipping the project.
+            // Inject placeholder text directly into the DOM (no setContent navigation) and screenshot it.
             if (pageCheck.isBlank && !hasCompileError) {
                 log(`Route ${route} not implemented — saving placeholder screenshot`);
                 try {
-                    await page.setContent(`<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<style>
-  body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;font-family:Arial,sans-serif;}
-  .card{text-align:center;padding:48px 64px;border:2px dashed #bbb;border-radius:12px;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.08);}
-  h2{color:#444;margin:0 0 12px;font-size:22px;}
-  p{color:#888;margin:0;font-size:14px;}
-  code{color:#c0392b;background:#fdf2f2;padding:2px 8px;border-radius:4px;font-size:13px;}
-</style>
-</head><body>
-<div class="card">
-  <h2>Route Not Implemented</h2>
-  <p>The route <code>${route}</code> does not exist in this project.</p>
-</div>
-</body></html>`);
+                    await page.evaluate((routePath) => {
+                        document.documentElement.style.cssText = 'height:100%;margin:0;padding:0;';
+                        document.body.style.cssText = 'margin:0;height:100%;display:flex;align-items:center;justify-content:center;background:#f0f2f5;font-family:Arial,sans-serif;';
+                        document.body.innerHTML = `
+                            <div style="text-align:center;padding:48px 64px;border:2px dashed #bbb;border-radius:12px;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.08);">
+                                <h2 style="color:#444;margin:0 0 12px;font-size:22px;">Route Not Implemented</h2>
+                                <p style="color:#888;margin:0;font-size:14px;">The route <code style="color:#c0392b;background:#fdf2f2;padding:2px 8px;border-radius:4px;">${routePath}</code> does not exist in this project.</p>
+                            </div>`;
+                    }, route);
                     await page.screenshot({ path: savePath, fullPage: false });
                 } catch (_) {}
                 if (onRouteProgress) {
