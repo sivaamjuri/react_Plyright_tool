@@ -1353,10 +1353,7 @@ const LOGIN_URL_PATTERN = /\/(login|signin|sign-in|log-in|auth)(\/|$|\?|#)/i;
 
 // Helper: Detect login page — URL-based (covers React Router redirects) + DOM-based
 async function detectLoginPage(page) {
-    // Primary: check if the current URL already points to a login route
     const urlMatch = LOGIN_URL_PATTERN.test(page.url());
-
-    // Secondary: look for password field in the DOM
     const domInfo = await page.evaluate(() => {
         const inputs = Array.from(document.querySelectorAll('input'));
         const hasEmail = inputs.some(i =>
@@ -1374,10 +1371,39 @@ async function detectLoginPage(page) {
     return { ...domInfo, urlMatch, isLoginPage };
 }
 
-// Helper: Attempt login with fixed credentials
-async function attemptLogin(page) {
-    const EMAIL = 'user@example.com';
-    const PASSWORD = 'password123';
+// Strategy 1: Inject common auth cookies + localStorage (works for apps that only check
+// token *existence*, not validity — e.g. NxtWave projects using js-cookie / ProtectedRoute)
+async function tryInjectAuthToken(page) {
+    try {
+        const urlObj = new URL(page.url());
+        const domain = urlObj.hostname;
+        const DUMMY = 'screenshot_auth_token';
+
+        await page.context().addCookies([
+            { name: 'jwt_token',   value: DUMMY, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
+            { name: 'token',       value: DUMMY, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
+            { name: 'auth_token',  value: DUMMY, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
+            { name: 'accessToken', value: DUMMY, domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' },
+        ]);
+        await page.evaluate((dummy) => {
+            localStorage.setItem('jwt_token',   dummy);
+            localStorage.setItem('token',       dummy);
+            localStorage.setItem('authToken',   dummy);
+            localStorage.setItem('accessToken', dummy);
+            localStorage.setItem('user', JSON.stringify({ id: 1, email: 'admin@example.com', name: 'Admin', role: 'admin' }));
+        }, DUMMY);
+
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await page.waitForTimeout(1500);
+
+        return !LOGIN_URL_PATTERN.test(page.url());
+    } catch (_) {
+        return false;
+    }
+}
+
+// Strategy 2: Fill login form with given credentials and submit
+async function tryFormLogin(page, email, password) {
     try {
         const emailSel = [
             'input[type="email"]',
@@ -1389,11 +1415,12 @@ async function attemptLogin(page) {
             'input[placeholder*="email" i]',
             'input[placeholder*="username" i]',
         ].join(', ');
+
         const emailField = await page.$(emailSel);
-        if (emailField) await emailField.fill(EMAIL);
+        if (emailField) { await emailField.fill(''); await emailField.fill(email); }
 
         const passwordField = await page.$('input[type="password"]');
-        if (passwordField) await passwordField.fill(PASSWORD);
+        if (passwordField) { await passwordField.fill(''); await passwordField.fill(password); }
 
         const urlBeforeSubmit = page.url();
 
@@ -1405,28 +1432,50 @@ async function attemptLogin(page) {
             let clicked = false;
             for (const btn of btns) {
                 const text = await btn.innerText().catch(() => '');
-                if (/login|sign.?in|log.?in/i.test(text)) {
-                    await btn.click();
-                    clicked = true;
-                    break;
-                }
+                if (/login|sign.?in|log.?in/i.test(text)) { await btn.click(); clicked = true; break; }
             }
             if (!clicked && btns.length > 0) await btns[0].click();
         }
 
-        // Wait for navigation after submit (React Router navigates client-side)
-        await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+        await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
         await page.waitForTimeout(1500);
 
         const newUrl = page.url();
-        // Success: URL changed and is no longer a login URL
         if (newUrl !== urlBeforeSubmit && !LOGIN_URL_PATTERN.test(newUrl)) return true;
-        // Fallback: DOM check
         const stillLogin = await detectLoginPage(page).catch(() => ({ isLoginPage: false }));
         return !stillLogin.isLoginPage;
-    } catch (e) {
+    } catch (_) {
         return false;
     }
+}
+
+// Helper: Attempt login — token injection first, then form credentials
+async function attemptLogin(page) {
+    log(`Auth: trying cookie/localStorage token injection...`);
+    const injected = await tryInjectAuthToken(page);
+    if (injected) {
+        log(`Auth: token injection succeeded (app only checks token existence)`);
+        return true;
+    }
+    log(`Auth: injection failed — trying form credentials...`);
+
+    // Common credential pairs (extend if needed)
+    const credentials = [
+        { email: 'admin@example.com', password: 'admin123' },
+        { email: 'user@example.com',  password: 'password123' },
+        { email: 'test@example.com',  password: 'test123' },
+    ];
+    for (const cred of credentials) {
+        // If we're no longer on the login page (e.g. injection partially worked), re-check
+        if (!LOGIN_URL_PATTERN.test(page.url())) {
+            const check = await detectLoginPage(page).catch(() => ({ isLoginPage: false }));
+            if (!check.isLoginPage) { log(`Auth: already past login page`); return true; }
+        }
+        log(`Auth: trying form login — ${cred.email}`);
+        const ok = await tryFormLogin(page, cred.email, cred.password);
+        if (ok) { log(`Auth: form login succeeded with ${cred.email}`); return true; }
+    }
+    return false;
 }
 
 // Helper: Capture Screenshots
@@ -1851,49 +1900,56 @@ app.post('/compare', compareUpload, async (req, res) => {
         sendProgress({ type: 'status', message: 'Capturing Solution Screenshots...' });
         const solLogName = solRoot.type === 'static' ? 'static-server.log' : 'dev-server.log';
         const solLogPath = path.join(solRoot.path, solLogName);
-        await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir, sharedBrowser, (evt) => {
-            if (evt.kind === 'auth') {
-                sendProgress({
-                    type: 'pipeline',
-                    scope: 'reference',
-                    projectIndex: 0,
-                    projectTotal: 0,
-                    studentName: 'Reference solution',
-                    phase: `auth_${evt.stage}`,
-                    message: evt.message
-                });
-            } else if (evt.kind === 'start') {
-                sendProgress({
-                    type: 'pipeline',
-                    scope: 'reference',
-                    projectIndex: 0,
-                    projectTotal: 0,
-                    studentName: 'Reference solution',
-                    phase: 'screenshot_capture',
-                    message: `Capturing ${evt.pageLabel} (${evt.route}) → ${evt.fileName}…`
-                });
-            } else if (evt.ok) {
-                sendProgress({
-                    type: 'pipeline',
-                    scope: 'reference',
-                    projectIndex: 0,
-                    projectTotal: 0,
-                    studentName: 'Reference solution',
-                    phase: 'screenshot_saved',
-                    message: `Screenshot saved — ${evt.fileName} (${evt.pageLabel})`
-                });
-            } else {
-                sendProgress({
-                    type: 'pipeline',
-                    scope: 'reference',
-                    projectIndex: 0,
-                    projectTotal: 0,
-                    studentName: 'Reference solution',
-                    phase: 'screenshot_failed',
-                    message: `Screenshot failed — ${evt.fileName}: ${evt.error || 'unknown error'}`
-                });
-            }
-        }, solLogPath);
+        try {
+            await captureScreenshots(solServer.baseUrl, routes, solScreenshotDir, sharedBrowser, (evt) => {
+                if (evt.kind === 'auth') {
+                    sendProgress({
+                        type: 'pipeline',
+                        scope: 'reference',
+                        projectIndex: 0,
+                        projectTotal: 0,
+                        studentName: 'Reference solution',
+                        phase: `auth_${evt.stage}`,
+                        message: evt.message
+                    });
+                } else if (evt.kind === 'start') {
+                    sendProgress({
+                        type: 'pipeline',
+                        scope: 'reference',
+                        projectIndex: 0,
+                        projectTotal: 0,
+                        studentName: 'Reference solution',
+                        phase: 'screenshot_capture',
+                        message: `Capturing ${evt.pageLabel} (${evt.route}) → ${evt.fileName}…`
+                    });
+                } else if (evt.ok) {
+                    sendProgress({
+                        type: 'pipeline',
+                        scope: 'reference',
+                        projectIndex: 0,
+                        projectTotal: 0,
+                        studentName: 'Reference solution',
+                        phase: 'screenshot_saved',
+                        message: `Screenshot saved — ${evt.fileName} (${evt.pageLabel})`
+                    });
+                } else {
+                    sendProgress({
+                        type: 'pipeline',
+                        scope: 'reference',
+                        projectIndex: 0,
+                        projectTotal: 0,
+                        studentName: 'Reference solution',
+                        phase: 'screenshot_failed',
+                        message: `Screenshot failed — ${evt.fileName}: ${evt.error || 'unknown error'}`
+                    });
+                }
+            }, solLogPath);
+        } catch (solAuthErr) {
+            // Auth failure on solution ends the run gracefully (no reference = cannot compare)
+            sendProgress({ type: 'error', message: `Solution screenshots failed: ${solAuthErr.message}. Cannot compare without reference screenshots.` });
+            res.end();
+            return;
+        }
 
         // FREE UP RAM FOR AWS t3.micro: Kill the solution server immediately after screenshots!
         if (solServer?.process) {
