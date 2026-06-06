@@ -1536,6 +1536,8 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
     const browser = sharedBrowser || await chromium.launch();
     const page = await browser.newPage();
 
+    let authTokenNames = null; // set during auth pre-check, reused in route loop
+
     // --- Authentication pre-check (before route loop) ---
     try {
         await page.setViewportSize({ width: 1280, height: 800 });
@@ -1556,6 +1558,7 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
 
             // Discover token key names from project source (falls back to defaults if projectDir null)
             const tokenNames = projectDir ? discoverAuthTokenNames(projectDir) : discoverAuthTokenNames('');
+            authTokenNames = tokenNames; // expose to route loop for re-auth on redirect
 
             let loginSuccess = false;
             try { loginSuccess = await attemptLogin(page, tokenNames); } catch (_) {}
@@ -1588,6 +1591,31 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
         const fileName = route === '/' ? 'index.png' : `${route.replace(/\//g, '')}.png`;
         const pageLabel = route === '/' ? 'Home Page' : route;
         const savePath = path.join(outputDir, fileName);
+
+        // When auth is active and this route IS the login page, the app will redirect away
+        // (most React apps redirect authenticated users away from /login).
+        // Capture it using a fresh browser context that has no auth cookies.
+        if (authTokenNames && LOGIN_URL_PATTERN.test(url)) {
+            log(`Route ${route} is the login route — capturing with fresh (unauthenticated) context`);
+            if (onRouteProgress) onRouteProgress({ kind: 'start', route, pageLabel, fileName });
+            const freshCtx = await browser.newContext();
+            const freshPage = await freshCtx.newPage();
+            try {
+                await freshPage.setViewportSize({ width: 1280, height: 800 });
+                await freshPage.goto(url, { waitUntil: 'domcontentloaded', timeout: PLAYWRIGHT_GOTO_TIMEOUT_MS });
+                await freshPage.waitForTimeout(1500);
+                await freshPage.addStyleTag({ content: '*, *::before, *::after { transition: none !important; animation: none !important; caret-color: transparent !important; }' });
+                await freshPage.screenshot({ path: savePath, fullPage: true });
+                if (onRouteProgress) onRouteProgress({ kind: 'done', route, pageLabel, fileName, ok: true });
+            } catch (freshErr) {
+                log(`Failed to capture login route ${route}: ${freshErr.message}`);
+                if (onRouteProgress) onRouteProgress({ kind: 'done', route, pageLabel, fileName, ok: false, error: freshErr.message });
+            } finally {
+                await freshPage.close().catch(() => {});
+                await freshCtx.close().catch(() => {});
+            }
+            continue;
+        }
 
         // Listen for console and page errors
         const pageErrors = [];
@@ -1629,6 +1657,25 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
 
             // Small settle delay for dynamic layout without adding too much latency
             await page.waitForTimeout(300);
+
+            // If a protected route redirected us to login (e.g. cookie not carried), re-inject and retry
+            if (authTokenNames && LOGIN_URL_PATTERN.test(page.url())) {
+                log(`Route ${route}: redirected to login after navigation — re-injecting auth tokens and retrying`);
+                try {
+                    const domain = new URL(baseUrl).hostname;
+                    await page.context().addCookies(
+                        authTokenNames.map(name => ({ name, value: 'screenshot_auth_token', domain, path: '/', httpOnly: false, secure: false, sameSite: 'Lax' }))
+                    );
+                    await page.evaluate((names) => {
+                        const v = 'screenshot_auth_token';
+                        names.forEach(n => { localStorage.setItem(n, v); sessionStorage.setItem(n, v); });
+                    }, authTokenNames);
+                    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: PLAYWRIGHT_GOTO_TIMEOUT_MS });
+                    await page.waitForTimeout(1500);
+                } catch (reAuthErr) {
+                    log(`Re-auth on route ${route} failed (non-fatal): ${reAuthErr.message}`);
+                }
+            }
 
             // Check for blank page or compilation error overlays
             const pageCheck = await page.evaluate(() => {
@@ -1689,12 +1736,29 @@ async function captureScreenshots(baseUrl, routes, outputDir, sharedBrowser = nu
                                     pageCheck.hasShadowOverlay;
 
             // Blank page without a compile overlay means the route is not implemented.
-            // Score it as 0% for this route and continue — do not skip the whole project.
+            // Save a visible placeholder screenshot and score 0% for this route — continue without skipping the project.
             if (pageCheck.isBlank && !hasCompileError) {
-                const blankMsg = `Route ${route} rendered a blank page (not implemented) — scoring as 0%`;
-                log(blankMsg);
+                log(`Route ${route} not implemented — saving placeholder screenshot`);
+                try {
+                    await page.setContent(`<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f5;font-family:Arial,sans-serif;}
+  .card{text-align:center;padding:48px 64px;border:2px dashed #bbb;border-radius:12px;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.08);}
+  h2{color:#444;margin:0 0 12px;font-size:22px;}
+  p{color:#888;margin:0;font-size:14px;}
+  code{color:#c0392b;background:#fdf2f2;padding:2px 8px;border-radius:4px;font-size:13px;}
+</style>
+</head><body>
+<div class="card">
+  <h2>Route Not Implemented</h2>
+  <p>The route <code>${route}</code> does not exist in this project.</p>
+</div>
+</body></html>`);
+                    await page.screenshot({ path: savePath, fullPage: false });
+                } catch (_) {}
                 if (onRouteProgress) {
-                    onRouteProgress({ kind: 'done', route, pageLabel, fileName, ok: false, error: 'Blank page — route not implemented' });
+                    onRouteProgress({ kind: 'done', route, pageLabel, fileName, ok: false, error: 'Route not implemented' });
                 }
                 continue;
             }
